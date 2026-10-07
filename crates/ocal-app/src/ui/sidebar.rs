@@ -140,6 +140,7 @@ impl Ocal {
                     .child(div().flex_1().min_w_0().text_ellipsis().child(name))
                     .on_click(cx.listener(move |app, _, window, cx| {
                         app.active_set = id.clone();
+                        app.remember("set", id.clone().unwrap_or_default());
                         app.selected = None;
                         window.focus(&app.focus, cx);
                         cx.notify();
@@ -212,7 +213,9 @@ impl Ocal {
                             {
                                 current.visible = c.visible;
                             }
-                            app.active_set = None;
+                            if app.active_set.take().is_some() {
+                                app.remember("set", "");
+                            }
                             app.dispatch(Command::Visible(c));
                             cx.notify();
                         })),

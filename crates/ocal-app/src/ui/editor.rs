@@ -290,27 +290,11 @@ impl Ocal {
             .default_selected(REPEATS.iter().position(|r| *r == e.repeat).unwrap_or(0))
         });
         // The event's own zone and the desktop zone lead the searchable list.
-        let mut zones = vec![e.timezone.clone(), system_zone()];
-        zones.extend(
-            chrono_tz::TZ_VARIANTS
-                .iter()
-                .map(|z| z.name().to_owned())
-                .filter(|z| z.contains('/') && !z.starts_with("Etc/")),
-        );
-        zones.push("UTC".into());
-        let mut seen = HashSet::new();
-        zones.retain(|z| seen.insert(z.clone()));
+        let zones = zone_names(&[e.timezone.clone(), system_zone()]);
         let timezone = cx.new(|cx| {
-            ChoiceState::new(
-                zones
-                    .iter()
-                    .map(|z| ChoiceItem::new(z.clone(), z.replace('_', " ")))
-                    .collect(),
-                window,
-                cx,
-            )
-            .label("Time zone")
-            .default_selected(0)
+            ChoiceState::new(zone_items(&zones), window, cx)
+                .label("Time zone")
+                .default_selected(0)
         });
         for choice in [&calendar, &repeat, &timezone] {
             cx.observe(choice, |_, _, cx| cx.notify()).detach();

@@ -137,6 +137,26 @@ const WIDE: f32 = 1100.;
 const SIDEBAR: f32 = 15.;
 const HEADER: f32 = 2.7;
 const STATUS: f32 = 1.8;
+/// IANA zones for pickers: `lead` first, then every regional zone, then UTC.
+fn zone_names(lead: &[String]) -> Vec<String> {
+    let mut zones = lead.to_vec();
+    zones.extend(
+        chrono_tz::TZ_VARIANTS
+            .iter()
+            .map(|z| z.name().to_owned())
+            .filter(|z| z.contains('/') && !z.starts_with("Etc/")),
+    );
+    zones.push("UTC".into());
+    let mut seen = HashSet::new();
+    zones.retain(|z| seen.insert(z.clone()));
+    zones
+}
+fn zone_items(zones: &[String]) -> Vec<ChoiceItem> {
+    zones
+        .iter()
+        .map(|z| ChoiceItem::new(z.clone(), z.replace('_', " ")))
+        .collect()
+}
 /// Width-dependent layout decisions, resolved once per frame.
 #[derive(Clone, Copy)]
 pub(super) struct Layout {
@@ -174,6 +194,8 @@ pub struct Ocal {
     /// The user hid the docked sidebar in a wide window.
     sidebar_hidden: bool,
     search_open: bool,
+    zones: Vec<String>,
+    zone_choice: Entity<ChoiceState>,
     active_set: Option<String>,
     grid_scroll: ScrollHandle,
     form_scroll: ScrollHandle,
@@ -193,6 +215,10 @@ pub struct Ocal {
     scroll_to_now: bool,
     /// Open the new-event editor once calendars have loaded (`--new`).
     pending_new: bool,
+    /// Stored preferences are applied once, from the first snapshot.
+    preferences_applied: bool,
+    /// `--view` wins over the remembered view.
+    view_override: bool,
     slot_anchor: f32,
 }
 impl Ocal {
@@ -225,6 +251,23 @@ impl Ocal {
         .detach();
         let display_zone = system_zone();
         let date = Utc::now().with_timezone(&zone(&display_zone)).date_naive();
+        let zones = zone_names(std::slice::from_ref(&display_zone));
+        let zone_choice = cx.new(|cx| {
+            ChoiceState::new(zone_items(&zones), window, cx)
+                .label("Display time zone")
+                .default_selected(0)
+        });
+        cx.observe(&zone_choice, |app, choice, cx| {
+            if let Some(zone) = choice.read(cx).selected().map(|c| c.value.to_string())
+                && zone != app.display_zone
+            {
+                app.remember("zone", zone.clone());
+                app.display_zone = zone;
+                app.reveal_cursor = true;
+            }
+            cx.notify();
+        })
+        .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         Self {
@@ -254,6 +297,8 @@ impl Ocal {
             sidebar_open: false,
             sidebar_hidden: false,
             search_open: false,
+            zones,
+            zone_choice,
             active_set: None,
             grid_scroll: ScrollHandle::new(),
             form_scroll: ScrollHandle::new(),
@@ -271,6 +316,8 @@ impl Ocal {
             initial_grid_scroll: true,
             scroll_to_now: false,
             pending_new: false,
+            preferences_applied: false,
+            view_override: false,
             slot_anchor: 0.5,
         }
     }
@@ -278,6 +325,10 @@ impl Ocal {
         match event {
             WorkerEvent::Snapshot(s) => {
                 self.snapshot = s;
+                if !self.preferences_applied {
+                    self.preferences_applied = true;
+                    self.apply_preferences(cx);
+                }
                 // Debug builds can open an event's details at launch, for screenshots.
                 #[cfg(debug_assertions)]
                 {
@@ -291,6 +342,11 @@ impl Ocal {
                             .iter()
                             .find(|e| e.title == title)
                             .cloned();
+                    }
+                    match std::env::var("OCAL_DEBUG_PAGE").as_deref() {
+                        Ok("settings") => self.settings = true,
+                        Ok("help") => self.help = true,
+                        _ => (),
                     }
                 }
                 if self.status == "Saved · Generating Google Meet…"
@@ -384,6 +440,34 @@ impl Ocal {
     }
     pub fn set_view(&mut self, view: View) {
         self.view = view;
+        self.view_override = true;
+    }
+    fn apply_preferences(&mut self, cx: &mut Context<Self>) {
+        let prefs = self.snapshot.preferences.clone();
+        let get = |key: &str| prefs.get(key).map(String::as_str);
+        if !self.view_override
+            && let Some(view) = get("view").and_then(View::parse)
+        {
+            self.view = view;
+        }
+        if let Some(zoom) = get("zoom").and_then(|z| z.parse::<f32>().ok()) {
+            self.zoom = zoom.clamp(0.7, 1.8);
+        }
+        if let Some(zone) = get("zone").filter(|z| z.parse::<Tz>().is_ok()) {
+            self.display_zone = zone.into();
+            let index = self.zones.iter().position(|z| z == zone);
+            self.zone_choice
+                .update(cx, |c, cx| c.set_selected(index, cx));
+        }
+        self.sidebar_hidden = get("sidebar") == Some("hidden");
+        self.active_set = get("set")
+            .filter(|id| self.snapshot.sets.iter().any(|s| s.id == *id))
+            .map(Into::into);
+        self.reveal_cursor = true;
+    }
+    /// Persist an interface choice for the next launch.
+    fn remember(&self, key: &str, value: impl Into<String>) {
+        self.dispatch(Command::SavePreference(key.into(), value.into()));
     }
     /// Open a new event at the next quarter hour as soon as calendars load.
     pub fn new_on_launch(&mut self) {
@@ -410,6 +494,14 @@ impl Ocal {
         if self.layout(window).sidebar {
             self.sidebar_hidden = !self.sidebar_hidden;
             self.sidebar_open = false;
+            self.remember(
+                "sidebar",
+                if self.sidebar_hidden {
+                    "hidden"
+                } else {
+                    "shown"
+                },
+            );
         } else {
             self.sidebar_open = !self.sidebar_open;
         }
@@ -548,6 +640,7 @@ impl Ocal {
             return;
         }
         self.view = view;
+        self.remember("view", view.label().to_lowercase());
         self.selected = None;
         window.focus(&self.focus, cx);
         self.reveal_cursor = true;
@@ -803,16 +896,19 @@ impl Render for Ocal {
             .on_action(cx.listener(|app, _: &Sync, _, _cx| app.dispatch(Command::Sync(app.date))))
             .on_action(cx.listener(|app, _: &ZoomIn, _, cx| {
                 app.zoom = (app.zoom + 0.1).min(1.8);
+                app.remember("zoom", format!("{:.1}", app.zoom));
                 app.reveal_cursor = true;
                 cx.notify();
             }))
             .on_action(cx.listener(|app, _: &ZoomOut, _, cx| {
                 app.zoom = (app.zoom - 0.1).max(0.7);
+                app.remember("zoom", format!("{:.1}", app.zoom));
                 app.reveal_cursor = true;
                 cx.notify();
             }))
             .on_action(cx.listener(|app, _: &ZoomReset, _, cx| {
                 app.zoom = 1.;
+                app.remember("zoom", format!("{:.1}", app.zoom));
                 app.reveal_cursor = true;
                 cx.notify();
             }))

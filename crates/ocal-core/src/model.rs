@@ -254,4 +254,7 @@ pub struct Snapshot {
     pub accounts: Vec<Account>,
     pub events: Vec<Event>,
     pub sets: Vec<CalendarSet>,
+    /// Interface choices such as view, zoom and display zone.
+    #[serde(default)]
+    pub preferences: std::collections::BTreeMap<String, String>,
 }

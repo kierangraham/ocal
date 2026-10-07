@@ -6,7 +6,10 @@ use std::{
     time::Instant,
 };
 pub enum Command {
-    Save { event: CalendarEvent, notify: bool },
+    Save {
+        event: CalendarEvent,
+        notify: bool,
+    },
     Delete(CalendarEvent),
     Respond(CalendarEvent, String),
     Sync(NaiveDate),
@@ -14,6 +17,9 @@ pub enum Command {
     ConnectCustom,
     Visible(Calendar),
     SaveSet(CalendarSet),
+    DeleteSet(String),
+    /// Remember an interface choice; no snapshot follows.
+    SavePreference(String, String),
     Import,
     Export(Vec<CalendarEvent>),
 }
@@ -81,6 +87,12 @@ impl Worker {
                 let command = match receiver.recv_timeout(std::time::Duration::from_secs(
                     if pending.is_some() { 2 } else { 30 },
                 )) {
+                    Ok(Command::SavePreference(key, value)) => {
+                        if let Err(error) = service.store.save_preference(&key, &value) {
+                            eprintln!("Ocal: could not save preference {key}: {error:#}");
+                        }
+                        continue;
+                    }
                     Ok(command) => command,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -146,6 +158,11 @@ impl Worker {
                             service.store.save_set(&set)?;
                             Ok(Some(Event::Status("Calendar set saved".into())))
                         }
+                        Command::DeleteSet(id) => {
+                            service.store.delete_set(&id)?;
+                            Ok(Some(Event::Status("Calendar set removed".into())))
+                        }
+                        Command::SavePreference(..) => unreachable!("handled on receipt"),
                         Command::Connect => {
                             if demo {
                                 anyhow::bail!("Demo has no live accounts");

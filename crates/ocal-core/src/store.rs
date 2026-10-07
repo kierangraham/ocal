@@ -106,7 +106,18 @@ impl Store {
             accounts: self.read("SELECT data FROM accounts ORDER BY id")?,
             events: self.read("SELECT data FROM events")?,
             sets: self.read("SELECT data FROM calendar_sets ORDER BY id")?,
+            preferences: self.preferences()?,
         })
+    }
+    pub fn preferences(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let mut statement = self.db.prepare("SELECT key, value FROM preferences")?;
+        let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn delete_set(&self, id: &str) -> Result<()> {
+        self.db
+            .execute("DELETE FROM calendar_sets WHERE id=?1", [id])?;
+        Ok(())
     }
     pub fn save_set(&self, set: &CalendarSet) -> Result<()> {
         self.db.execute("INSERT INTO calendar_sets VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![set.id,serde_json::to_string(set)?])?;
@@ -231,5 +242,21 @@ mod tests {
         let snapshot = s.snapshot().unwrap();
         assert!(snapshot.events[0].completed);
         assert_eq!(snapshot.sets[0].calendars, vec!["local-work"]);
+        s.delete_set("focus").unwrap();
+        assert!(s.snapshot().unwrap().sets.is_empty());
+    }
+    #[test]
+    fn preferences_survive_reopening() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("calendar.sqlite3");
+        {
+            let s = Store::open(&path).unwrap();
+            s.save_preference("view", "month").unwrap();
+            s.save_preference("zoom", "1.2").unwrap();
+            s.save_preference("view", "agenda").unwrap();
+        }
+        let prefs = Store::open(&path).unwrap().snapshot().unwrap().preferences;
+        assert_eq!(prefs.get("view").map(String::as_str), Some("agenda"));
+        assert_eq!(prefs.get("zoom").map(String::as_str), Some("1.2"));
     }
 }

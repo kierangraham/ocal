@@ -1041,3 +1041,81 @@ fn typed_and_stepped_times_carry_the_end_with_the_start(cx: &mut TestAppContext)
     assert_eq!(start.format("%H:%M").to_string(), "14:00");
     assert_eq!(event.end - event.start, Duration::minutes(15));
 }
+
+#[gpui_kit::test]
+fn remembered_choices_apply_once_and_changes_are_saved(cx: &mut TestAppContext) {
+    let (view, cx, commands) = fixture(cx);
+    view.update(cx, |app, cx| {
+        app.preferences_applied = false;
+        let mut snapshot = app.snapshot.clone();
+        for (key, value) in [
+            ("view", "month"),
+            ("zoom", "1.2"),
+            ("zone", "America/New_York"),
+            ("sidebar", "hidden"),
+            ("set", "missing-set"),
+        ] {
+            snapshot.preferences.insert(key.into(), value.into());
+        }
+        app.event(WorkerEvent::Snapshot(snapshot), cx);
+    });
+    view.read_with(cx, |app, cx| {
+        assert_eq!(app.view, View::Month);
+        assert!((app.zoom - 1.2).abs() < 0.01);
+        assert_eq!(app.display_zone, "America/New_York");
+        assert_eq!(
+            app.zone_choice.read(cx).selected().unwrap().value.as_ref(),
+            "America/New_York"
+        );
+        assert!(app.sidebar_hidden);
+        // A set that no longer exists is ignored.
+        assert!(app.active_set.is_none());
+    });
+    // Applying the remembered zone does not write it back.
+    assert!(commands.try_recv().is_err());
+    cx.simulate_keystrokes("2");
+    draw(cx);
+    let saved: Vec<_> = commands
+        .try_iter()
+        .filter_map(|c| match c {
+            Command::SavePreference(k, v) => Some((k, v)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(saved, vec![("view".to_string(), "week".to_string())]);
+    view.update(cx, |app, cx| {
+        let mut snapshot = app.snapshot.clone();
+        snapshot.preferences.insert("view".into(), "agenda".into());
+        app.event(WorkerEvent::Snapshot(snapshot), cx);
+    });
+    assert!(view.read_with(cx, |app, _| app.view == View::Week));
+}
+
+#[gpui_kit::test]
+fn settings_and_help_pages_render_and_return_to_the_calendar(cx: &mut TestAppContext) {
+    let (view, cx, commands) = fixture(cx);
+    view.update(cx, |app, cx| {
+        app.snapshot.sets.push(CalendarSet {
+            id: "focus".into(),
+            name: "Focus".into(),
+            calendars: vec!["local-work".into()],
+        });
+        app.settings = true;
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("set-0").is_some());
+    let remove = cx.debug_bounds("tool-Remove set").unwrap().center();
+    cx.simulate_click(remove, Default::default());
+    assert!(matches!(commands.try_recv().unwrap(), Command::DeleteSet(id) if id == "focus"));
+    let back = cx.debug_bounds("back-to-calendar").unwrap().center();
+    cx.simulate_click(back, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| !app.settings));
+    cx.simulate_keystrokes("?");
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.help));
+    let close = cx.debug_bounds("close-help").unwrap().center();
+    cx.simulate_click(close, Default::default());
+    assert!(view.read_with(cx, |app, _| !app.help));
+}

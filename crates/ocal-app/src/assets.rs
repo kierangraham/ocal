@@ -36,7 +36,8 @@ gpui_kit::assets::icon_assets!(
         CircleQuestionMark,
         Layers,
         CircleCheck,
-        CircleX
+        CircleX,
+        Minus
     ]
 );
 pub struct Assets;
