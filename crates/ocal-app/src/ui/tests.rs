@@ -927,3 +927,71 @@ fn editor_fits_small_light_windows_and_reveals_keyboard_focus_at_high_zoom(
         px(0.)
     );
 }
+
+#[gpui_kit::test]
+fn period_titles_name_both_months_when_a_week_spans_them(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    view.update(cx, |app, _| {
+        assert_eq!(
+            app.period_title(false),
+            ("October".to_string(), "2026".to_string())
+        );
+        app.date = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        assert_eq!(app.period_title(false).0, "Sep – Oct");
+        app.date = NaiveDate::from_ymd_opt(2026, 12, 30).unwrap();
+        assert_eq!(
+            app.period_title(false),
+            ("Dec 2026 – Jan".to_string(), "2027".to_string())
+        );
+        app.view = View::Day;
+        assert_eq!(app.period_title(false).0, "Wednesday 30 December");
+    });
+}
+
+#[gpui_kit::test]
+fn crowded_month_days_link_to_the_day_view(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    let busy = NaiveDate::from_ymd_opt(2026, 10, 14).unwrap();
+    view.update(cx, |app, cx| {
+        for hour in 8..18 {
+            let mut e = Event::new("local-work", busy, &app.display_zone).unwrap();
+            e.title = format!("Meeting {hour}");
+            e.start =
+                local_datetime(busy.and_hms_opt(hour, 0, 0).unwrap(), &app.display_zone).unwrap();
+            e.end = e.start + Duration::minutes(30);
+            app.snapshot.events.push(e);
+        }
+        cx.notify();
+    });
+    cx.simulate_keystrokes("3");
+    draw(cx);
+    cx.run_until_parked();
+    draw(cx);
+    // 14 October is the 18th cell of a Sunday-first grid starting on 27 September.
+    let more = cx.debug_bounds("month-more-17").unwrap();
+    let cell = cx.debug_bounds("month-day-17").unwrap();
+    assert!(more.bottom() <= cell.bottom() + px(1.));
+    cx.simulate_click(more.center(), Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.view == View::Day && app.date == busy));
+}
+
+#[gpui_kit::test]
+fn narrow_windows_open_search_from_the_header_and_escape_folds_it(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    cx.simulate_resize(size(px(850.), px(900.)));
+    draw(cx);
+    assert!(cx.debug_bounds("search").is_none());
+    assert!(cx.debug_bounds("period-title").is_some());
+    cx.simulate_keystrokes("/");
+    draw(cx);
+    assert!(cx.debug_bounds("search").is_some());
+    cx.simulate_keystrokes("C o f f e e");
+    draw(cx);
+    assert!(cx.debug_bounds("agenda-scroll").is_some());
+    cx.simulate_keystrokes("escape escape");
+    draw(cx);
+    assert!(view.read_with(cx, |app, cx| !app.search_open
+        && app.search.read(cx).value().is_empty()));
+    assert!(cx.debug_bounds("search").is_none());
+}

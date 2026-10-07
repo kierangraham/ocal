@@ -100,7 +100,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum View {
+pub enum View {
     Day,
     Week,
     Month,
@@ -108,6 +108,16 @@ enum View {
     Tasks,
 }
 impl View {
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "day" => Self::Day,
+            "week" => Self::Week,
+            "month" => Self::Month,
+            "agenda" => Self::Agenda,
+            "tasks" => Self::Tasks,
+            _ => return None,
+        })
+    }
     fn label(self) -> &'static str {
         match self {
             Self::Day => "Day",
@@ -372,6 +382,9 @@ impl Ocal {
     }
     fn dispatch(&self, command: Command) {
         let _ = self.commands.send(command);
+    }
+    pub fn set_view(&mut self, view: View) {
+        self.view = view;
     }
     fn layout(&self, window: &Window) -> Layout {
         let width = window.viewport_size().width;
@@ -713,13 +726,13 @@ impl Render for Ocal {
         } else if self.help {
             self.help_view(cx)
         } else if !self.search.read(cx).value().trim().is_empty() {
-            self.agenda(false, cx)
+            self.agenda(cx)
         } else {
             match self.view {
                 View::Day | View::Week => self.grid(cursor_event.as_ref(), window, cx),
                 View::Month => self.month(window, cx),
-                View::Agenda => self.agenda(false, cx),
-                View::Tasks => self.agenda(true, cx),
+                View::Agenda => self.agenda(cx),
+                View::Tasks => self.tasks(cx),
             }
         };
         let body = div()

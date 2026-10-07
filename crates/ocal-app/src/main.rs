@@ -7,16 +7,24 @@ use anyhow::{Context, Result};
 use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
 fn main() -> Result<()> {
     let mut demo = false;
-    for arg in std::env::args().skip(1) {
+    let mut view = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => demo = true,
+            "--view" => {
+                let name = args.next().unwrap_or_default();
+                view = Some(ui::View::parse(&name).with_context(|| {
+                    format!("Unknown view {name}. Use day, week, month, agenda or tasks")
+                })?);
+            }
             "--version" => {
                 println!("ocal {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--help" | "-h" => {
                 println!(
-                    "Ocal — native calendar for Omarchy\n\nUsage: ocal [--demo]\n\n--demo  Isolated sample calendar; never connects to Google\n\nArrows move the time cursor · Shift+arrows extend 15-minute ranges\nEnter opens the highlighted event or adds at the cursor/range\nc / Ctrl+N new event · t today · 1/2/3/4 day/week/month/agenda\nCtrl+Enter save · Escape dismiss · / search · ? all keys"
+                    "Ocal — native calendar for Omarchy\n\nUsage: ocal [--demo] [--view day|week|month|agenda|tasks]\n\n--demo  Isolated sample calendar; never connects to Google\n--view  Open in this view\n\nArrows move the time cursor · Shift+arrows extend 15-minute ranges\nEnter opens the highlighted event or adds at the cursor/range\nc / Ctrl+N new event · t today · 1-5 day/week/month/agenda/tasks\nCtrl+Enter save · Escape dismiss · / search · ? all keys"
                 );
                 return Ok(());
             }
@@ -51,7 +59,15 @@ fn main() -> Result<()> {
                     app_id: Some("ocal".into()),
                     ..Default::default()
                 },
-                move |window, cx| cx.new(|cx| ui::Ocal::new(worker, demo, window, cx)),
+                move |window, cx| {
+                    cx.new(|cx| {
+                        let mut app = ui::Ocal::new(worker, demo, window, cx);
+                        if let Some(view) = view {
+                            app.set_view(view);
+                        }
+                        app
+                    })
+                },
             )
             .expect("Open Ocal window");
             cx.activate(true);

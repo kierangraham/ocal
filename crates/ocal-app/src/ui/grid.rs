@@ -34,7 +34,7 @@ impl Ocal {
         let today = self.today();
         let now = Utc::now();
         let target = cx.entity().downgrade();
-        let weekend = |d: NaiveDate| d.weekday().num_days_from_sunday() % 6 == 0;
+        let weekend = |d: NaiveDate| d.weekday().num_days_from_sunday().is_multiple_of(6);
         let mut header = div()
             .flex()
             .pl(rems(3.4))
@@ -121,7 +121,7 @@ impl Ocal {
                 .when(weekend(date), |d| d.bg(t.foreground.opacity(0.02)));
             // Keep the row short; the rest are a click away in the day view.
             for e in items.iter().take(2) {
-                day = day.child(self.event_chip(e, counter, true, cx));
+                day = day.child(self.event_chip(e, counter, agenda::Chip::Bar, cx));
                 counter += 1;
             }
             if items.len() > 2 {
