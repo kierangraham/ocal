@@ -1,8 +1,8 @@
 use crate::*;
 use anyhow::Result;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 pub fn seed(store: &Store, today: NaiveDate) -> Result<()> {
-    let monday = week_start(today);
+    let monday = today - Duration::days(today.weekday().num_days_from_monday() as i64);
     for (day, hour, minutes, duration, title, cal, location) in [
         (0, 9, 0, 30, "Weekly planning", "local-work", "Studio"),
         (0, 10, 0, 90, "Deep work", "local-work", ""),

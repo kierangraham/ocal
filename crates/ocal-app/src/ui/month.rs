@@ -13,7 +13,7 @@ impl Ocal {
                 .border_b_1()
                 .border_color(t.divider())
                 .children(
-                    ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
                         .into_iter()
                         .map(|s| {
                             div()

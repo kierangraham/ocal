@@ -84,7 +84,7 @@ impl Ocal {
                     }),
             )
             .child(div().flex().pb(rems(0.3)).children(
-                ["M", "T", "W", "T", "F", "S", "S"].into_iter().map(|s| {
+                ["S", "M", "T", "W", "T", "F", "S"].into_iter().map(|s| {
                     div()
                         .w(rems(cell))
                         .text_center()

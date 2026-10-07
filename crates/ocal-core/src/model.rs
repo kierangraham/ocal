@@ -239,8 +239,9 @@ pub fn move_month(d: NaiveDate, n: i32) -> NaiveDate {
         .with_day(d.day().min((next - Duration::days(1)).day()))
         .unwrap()
 }
+/// Weeks start on Sunday, matching the date picker.
 pub fn week_start(d: NaiveDate) -> NaiveDate {
-    d - Duration::days(d.weekday().num_days_from_monday() as i64)
+    d - Duration::days(d.weekday().num_days_from_sunday() as i64)
 }
 pub fn month_days(d: NaiveDate) -> Vec<NaiveDate> {
     let start = week_start(month_start(d));

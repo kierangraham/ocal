@@ -461,12 +461,12 @@ fn timed_event_bounds_match_duration_even_for_short_and_overnight_events(cx: &mu
             let event = cx
                 .debug_bounds(
                     [
-                        "grid-event-0",
-                        "grid-event-1",
-                        "grid-event-2",
-                        "grid-event-3",
-                        "grid-event-4",
-                        "grid-event-5",
+                        "grid-event-1000",
+                        "grid-event-1001",
+                        "grid-event-1002",
+                        "grid-event-1003",
+                        "grid-event-1004",
+                        "grid-event-1005",
                     ][index],
                 )
                 .unwrap();
@@ -485,7 +485,7 @@ fn timed_event_bounds_match_duration_even_for_short_and_overnight_events(cx: &mu
         let next = view.read_with(cx, |app, _| {
             app.grid_bounds[&(app.date + Duration::days(1))]
         });
-        let continuation = cx.debug_bounds("grid-event-1000").unwrap();
+        let continuation = cx.debug_bounds("grid-event-2000").unwrap();
         assert!((continuation.top() - next.top()).abs() < px(1.));
         assert!((continuation.size.height - next.size.height / 24.).abs() < px(1.));
     }
@@ -495,11 +495,11 @@ fn timed_event_bounds_match_duration_even_for_short_and_overnight_events(cx: &mu
 fn time_line_highlights_events_and_enter_opens_them(cx: &mut TestAppContext) {
     let (view, cx, commands) = fixture(cx);
     assert_eq!(cx.debug_bounds("time-cursor").unwrap().size.height, px(2.));
-    assert!(cx.debug_bounds("time-selection-0").is_none());
-    assert!(cx.debug_bounds("highlighted-event-0").is_some());
+    assert!(cx.debug_bounds("time-selection-1").is_none());
+    assert!(cx.debug_bounds("highlighted-event-1000").is_some());
     cx.simulate_keystrokes("up");
     draw(cx);
-    assert!(cx.debug_bounds("highlighted-event-0").is_none());
+    assert!(cx.debug_bounds("highlighted-event-1000").is_none());
     cx.simulate_keystrokes("down enter");
     draw(cx);
     view.read_with(cx, |app, _| {
@@ -526,15 +526,15 @@ fn shift_navigation_creates_through_events_and_backtracks_to_the_line(cx: &mut T
     let (view, cx, _) = fixture(cx);
     cx.simulate_keystrokes("shift-down");
     draw(cx);
-    let range = cx.debug_bounds("time-selection-0").unwrap();
+    let range = cx.debug_bounds("time-selection-1").unwrap();
     let day = view.read_with(cx, |app, _| app.grid_bounds[&app.date]);
     assert!((range.size.height - day.size.height / 96.).abs() < px(1.));
-    assert!(cx.debug_bounds("highlighted-event-0").is_none());
+    assert!(cx.debug_bounds("highlighted-event-1000").is_none());
     assert!(view.read_with(cx, |app, cx| app.event_at_cursor(cx).is_none()));
     cx.simulate_keystrokes("shift-up");
     draw(cx);
-    assert!(cx.debug_bounds("time-selection-0").is_none());
-    assert!(cx.debug_bounds("highlighted-event-0").is_none());
+    assert!(cx.debug_bounds("time-selection-1").is_none());
+    assert!(cx.debug_bounds("highlighted-event-1000").is_none());
     cx.simulate_keystrokes("shift-up enter");
     draw(cx);
     view.read_with(cx, |app, cx| {
