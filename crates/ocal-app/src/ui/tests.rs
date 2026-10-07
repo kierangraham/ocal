@@ -361,17 +361,14 @@ fn keyboard_selects_quarters_and_typing_stays_in_the_editor(cx: &mut TestAppCont
     draw(cx);
     view.read_with(cx, |app, cx| {
         let f = app.editor.as_ref().unwrap();
-        assert_eq!(f.fields[2].read(cx).value().as_ref(), "09:00");
-        assert_eq!(f.fields[4].read(cx).value().as_ref(), "09:30");
+        assert_eq!(f.start_time.read(cx).value().as_ref(), "09:00");
+        assert_eq!(f.end_time.read(cx).value().as_ref(), "09:30");
     });
     cx.simulate_keystrokes("c t b 1");
     draw(cx);
     view.read_with(cx, |app, cx| {
         assert_eq!(
-            app.editor.as_ref().unwrap().fields[0]
-                .read(cx)
-                .value()
-                .as_ref(),
+            app.editor.as_ref().unwrap().title.read(cx).value().as_ref(),
             "ctb1"
         );
         assert_eq!(app.view, View::Week);
@@ -394,7 +391,11 @@ fn keyboard_selects_quarters_and_typing_stays_in_the_editor(cx: &mut TestAppCont
     cx.simulate_keystrokes("x");
     draw(cx);
     assert_eq!(
-        view.read_with(cx, |app, cx| app.editor.as_ref().unwrap().fields[0]
+        view.read_with(cx, |app, cx| app
+            .editor
+            .as_ref()
+            .unwrap()
+            .title
             .read(cx)
             .value()
             .to_string()),
@@ -407,7 +408,11 @@ fn keyboard_selects_quarters_and_typing_stays_in_the_editor(cx: &mut TestAppCont
     cx.simulate_keystrokes("x");
     draw(cx);
     assert_eq!(
-        view.read_with(cx, |app, cx| app.editor.as_ref().unwrap().fields[0]
+        view.read_with(cx, |app, cx| app
+            .editor
+            .as_ref()
+            .unwrap()
+            .title
             .read(cx)
             .value()
             .to_string()),
@@ -516,8 +521,8 @@ fn time_line_highlights_events_and_enter_opens_them(cx: &mut TestAppContext) {
     view.read_with(cx, |app, cx| {
         let f = app.editor.as_ref().unwrap();
         assert!(!f.editing);
-        assert_eq!(f.fields[2].read(cx).value().as_ref(), "09:30");
-        assert_eq!(f.fields[4].read(cx).value().as_ref(), "09:45");
+        assert_eq!(f.start_time.read(cx).value().as_ref(), "09:30");
+        assert_eq!(f.end_time.read(cx).value().as_ref(), "09:45");
     });
 }
 
@@ -540,15 +545,15 @@ fn shift_navigation_creates_through_events_and_backtracks_to_the_line(cx: &mut T
     view.read_with(cx, |app, cx| {
         let f = app.editor.as_ref().unwrap();
         assert!(!f.editing && app.selected.is_none());
-        assert_eq!(f.fields[2].read(cx).value().as_ref(), "08:45");
-        assert_eq!(f.fields[4].read(cx).value().as_ref(), "09:00");
+        assert_eq!(f.start_time.read(cx).value().as_ref(), "08:45");
+        assert_eq!(f.end_time.read(cx).value().as_ref(), "09:00");
     });
     cx.simulate_keystrokes("escape shift-down shift-down enter");
     draw(cx);
     view.read_with(cx, |app, cx| {
         let f = app.editor.as_ref().unwrap();
-        assert_eq!(f.fields[2].read(cx).value().as_ref(), "08:45");
-        assert_eq!(f.fields[4].read(cx).value().as_ref(), "09:15");
+        assert_eq!(f.start_time.read(cx).value().as_ref(), "08:45");
+        assert_eq!(f.end_time.read(cx).value().as_ref(), "09:15");
     });
 }
 
@@ -644,9 +649,9 @@ fn shift_drag_snaps_to_quarters_and_opens_the_same_editor(cx: &mut TestAppContex
     draw(cx);
     view.read_with(cx, |app, cx| {
         let f = app.editor.as_ref().expect("drag opens editor");
-        assert_eq!(f.fields[1].read(cx).value().as_ref(), "2026-10-08");
-        assert_eq!(f.fields[2].read(cx).value().as_ref(), "12:30");
-        assert_eq!(f.fields[4].read(cx).value().as_ref(), "13:15");
+        assert_eq!(f.start_date(cx).unwrap().to_string(), "2026-10-08");
+        assert_eq!(f.start_time.read(cx).value().as_ref(), "12:30");
+        assert_eq!(f.end_time.read(cx).value().as_ref(), "13:15");
     });
 }
 
@@ -689,8 +694,8 @@ fn right_click_opens_at_the_clicked_slot_and_uses_its_time(cx: &mut TestAppConte
     draw(cx);
     view.read_with(cx, |app, cx| {
         let f = app.editor.as_ref().unwrap();
-        assert_eq!(f.fields[1].read(cx).value().as_ref(), "2026-10-08");
-        assert_eq!(f.fields[2].read(cx).value().as_ref(), "12:30");
+        assert_eq!(f.start_date(cx).unwrap().to_string(), "2026-10-08");
+        assert_eq!(f.start_time.read(cx).value().as_ref(), "12:30");
     });
 }
 
@@ -759,10 +764,8 @@ fn meeting_choices_are_explicit_and_retries_keep_the_same_request(cx: &mut TestA
     cx.simulate_keystrokes("R e v i e w");
     draw(cx);
     assert!(view.read_with(cx, |app, cx| app.draft(cx).unwrap().meet_request.is_none()));
-    let b = cx.debug_bounds("meeting-trigger").unwrap();
+    let b = cx.debug_bounds("meeting-2").unwrap();
     cx.simulate_click(b.center(), Default::default());
-    draw(cx);
-    cx.simulate_keystrokes("end enter");
     draw(cx);
     assert_eq!(
         view.read_with(cx, |app, _| app.editor.as_ref().unwrap().meeting),
@@ -803,7 +806,7 @@ fn meeting_choices_are_explicit_and_retries_keep_the_same_request(cx: &mut TestA
             app.event(WorkerEvent::Error("Retry".into()), cx);
             let f = app.editor.as_mut().unwrap();
             f.meeting = 1;
-            f.fields[6].update(cx, |s, cx| {
+            f.link.update(cx, |s, cx| {
                 s.set_value("https://example.com/meeting", window, cx)
             });
             cx.notify();
@@ -824,15 +827,16 @@ fn paste_link_focus_and_explicit_removal_preserve_other_notes(cx: &mut TestAppCo
     draw(cx);
     cx.simulate_keystrokes("M e e t");
     draw(cx);
-    let trigger = cx.debug_bounds("meeting-trigger").unwrap().center();
+    let trigger = cx.debug_bounds("meeting-1").unwrap().center();
     cx.simulate_click(trigger, Default::default());
-    draw(cx);
-    cx.simulate_keystrokes("home down enter");
     draw(cx);
     cx.update(|window, cx| {
         view.read_with(cx, |app, cx| {
             assert!(
-                app.editor.as_ref().unwrap().fields[6]
+                app.editor
+                    .as_ref()
+                    .unwrap()
+                    .link
                     .read(cx)
                     .focus_handle(cx)
                     .is_focused(window)
@@ -907,7 +911,7 @@ fn editor_fits_small_light_windows_and_reveals_keyboard_focus_at_high_zoom(
         view.update(cx, |app, cx| {
             let f = app.editor.as_mut().unwrap();
             f.details = true;
-            f.fields[8].update(cx, |s, cx| s.focus(window, cx));
+            f.notes.update(cx, |s, cx| s.focus(window, cx));
             cx.notify();
         })
     });
@@ -994,4 +998,46 @@ fn narrow_windows_open_search_from_the_header_and_escape_folds_it(cx: &mut TestA
     assert!(view.read_with(cx, |app, cx| !app.search_open
         && app.search.read(cx).value().is_empty()));
     assert!(cx.debug_bounds("search").is_none());
+}
+
+#[gpui_kit::test]
+fn typed_and_stepped_times_carry_the_end_with_the_start(cx: &mut TestAppContext) {
+    let (view, cx, commands) = fixture(cx);
+    cx.simulate_keystrokes("c");
+    draw(cx);
+    cx.simulate_keystrokes("R u n");
+    let times = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, cx| {
+            let f = app.editor.as_ref().unwrap();
+            (
+                f.start_time.read(cx).value().to_string(),
+                f.end_time.read(cx).value().to_string(),
+            )
+        })
+    };
+    assert_eq!(times(cx), ("09:00".into(), "09:15".into()));
+    cx.update(|window, cx| {
+        view.update(cx, |app, cx| {
+            let f = app.editor.as_ref().unwrap();
+            f.start_time.update(cx, |s, cx| s.focus(window, cx));
+        })
+    });
+    draw(cx);
+    cx.simulate_keystrokes("up up");
+    draw(cx);
+    assert_eq!(times(cx), ("09:30".into(), "09:45".into()));
+    cx.simulate_keystrokes("ctrl-a backspace 2 p m");
+    draw(cx);
+    assert_eq!(times(cx), ("2pm".into(), "14:15".into()));
+    cx.simulate_keystrokes("ctrl-enter");
+    let Command::Save { event, .. } = commands
+        .try_iter()
+        .find(|c| matches!(c, Command::Save { .. }))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    let start = event.start.with_timezone(&zone("Europe/London"));
+    assert_eq!(start.format("%H:%M").to_string(), "14:00");
+    assert_eq!(event.end - event.start, Duration::minutes(15));
 }

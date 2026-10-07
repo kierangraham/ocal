@@ -426,6 +426,48 @@ impl Ocal {
                     );
                 col = col.child(highlighted);
             }
+            // Preview the event being edited where it will land.
+            if let Some(f) = self.editor.as_ref()
+                && let Some((s, e)) = f.span(cx)
+            {
+                let (s, e) = (s.with_timezone(&tz), e.with_timezone(&tz));
+                let day_start = date.and_hms_opt(0, 0, 0).unwrap();
+                let (s, e) = (s.naive_local(), e.naive_local());
+                if e > day_start && s < day_start + Duration::days(1) {
+                    let from = (s.max(day_start) - day_start).num_minutes() as f32 / 60.;
+                    let to = ((e - day_start).num_minutes() as f32 / 60.).min(24.);
+                    let title = f.title.read(cx).value().trim().to_string();
+                    let color = f
+                        .calendar
+                        .read(cx)
+                        .selected()
+                        .map(|c| self.calendar_color(&c.value, cx))
+                        .unwrap_or(t.accent);
+                    col = col.child(
+                        div()
+                            .debug_selector(move || format!("draft-{di}"))
+                            .absolute()
+                            .left(px(1.5))
+                            .right(px(1.5))
+                            .top(rems(from * HOUR))
+                            .h(rems((to - from) * HOUR))
+                            .border_1()
+                            .border_l_2()
+                            .border_color(color)
+                            .bg(tint(&t, color, 0.3))
+                            .px(rems(0.35))
+                            .overflow_hidden()
+                            .text_size(rems(if to - from < 0.5 { 0.58 } else { 0.68 }))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(event_text(&t, color))
+                            .child(if title.is_empty() {
+                                "New event".to_string()
+                            } else {
+                                title
+                            }),
+                    );
+                }
+            }
             if date == today {
                 col = col.child(
                     div()

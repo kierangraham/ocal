@@ -1,5 +1,184 @@
-//! Event editor.
+//! Event editor: a docked panel with date pickers and typed, steppable times.
 use super::*;
+use crate::appearance::swatch;
+use gpui_kit::base::CalendarEvent;
+use gpui_omarchy::{DatePickerState, combobox, date_picker, keycaps, switch};
+
+const REPEATS: [Repeat; 5] = [
+    Repeat::Never,
+    Repeat::Daily,
+    Repeat::Weekly,
+    Repeat::Monthly,
+    Repeat::Yearly,
+];
+const MEETINGS: [&str; 3] = ["None", "Link", "Google Meet"];
+
+pub(super) struct Editor {
+    pub(super) base: Event,
+    pub(super) title: Entity<InputState>,
+    pub(super) location: Entity<InputState>,
+    pub(super) link: Entity<InputState>,
+    pub(super) guests: Entity<InputState>,
+    pub(super) start_time: Entity<InputState>,
+    pub(super) end_time: Entity<InputState>,
+    pub(super) start_date: Entity<DatePickerState>,
+    pub(super) end_date: Entity<DatePickerState>,
+    pub(super) timezone: Entity<ChoiceState>,
+    pub(super) notes: Entity<TextareaState>,
+    pub(super) calendar: Entity<ChoiceState>,
+    pub(super) repeat: Entity<ChoiceState>,
+    pub(super) all_day: bool,
+    /// 0: none, 1: pasted link, 2: generate Google Meet.
+    pub(super) meeting: usize,
+    pub(super) meet_request: String,
+    pub(super) notify: bool,
+    pub(super) details: bool,
+    pub(super) editing: bool,
+    pub(super) discard: bool,
+    /// The draft as opened, for the unsaved-changes check.
+    initial: String,
+    /// The last valid start, so moving it carries the end along.
+    start_at: Option<NaiveDateTime>,
+    pub(super) focus: FocusHandle,
+    last_focus: Option<usize>,
+}
+
+impl Editor {
+    fn date(state: &Entity<DatePickerState>, cx: &App) -> Option<NaiveDate> {
+        state.read(cx).calendar.read(cx).date().start()
+    }
+    pub(super) fn start_date(&self, cx: &App) -> Option<NaiveDate> {
+        Self::date(&self.start_date, cx)
+    }
+    pub(super) fn end_date(&self, cx: &App) -> Option<NaiveDate> {
+        Self::date(&self.end_date, cx)
+    }
+    pub(super) fn start_time(&self, cx: &App) -> Option<NaiveTime> {
+        parse_time(&self.start_time.read(cx).value())
+    }
+    pub(super) fn end_time(&self, cx: &App) -> Option<NaiveTime> {
+        parse_time(&self.end_time.read(cx).value())
+    }
+    /// The draft's span in its own zone, for previewing it in the grid.
+    pub(super) fn span(&self, cx: &App) -> Option<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)> {
+        let tz = self
+            .timezone
+            .read(cx)
+            .selected()
+            .map(|z| z.value.to_string())
+            .unwrap_or_else(|| self.base.timezone.clone());
+        if self.all_day {
+            return None;
+        }
+        let (s, e) = (self.start(cx)?, self.end(cx)?);
+        let (s, e) = (local_datetime(s, &tz).ok()?, local_datetime(e, &tz).ok()?);
+        (e > s).then_some((s, e))
+    }
+    fn start(&self, cx: &App) -> Option<NaiveDateTime> {
+        Some(self.start_date(cx)?.and_time(self.start_time(cx)?))
+    }
+    fn end(&self, cx: &App) -> Option<NaiveDateTime> {
+        Some(self.end_date(cx)?.and_time(self.end_time(cx)?))
+    }
+    /// Text inputs in visual order, for disabling while saving and focus reveal.
+    fn inputs(&self) -> [&Entity<InputState>; 6] {
+        [
+            &self.title,
+            &self.start_time,
+            &self.end_time,
+            &self.location,
+            &self.link,
+            &self.guests,
+        ]
+    }
+    pub(super) fn set_disabled(&self, disabled: bool, cx: &mut App) {
+        for field in self.inputs() {
+            field.update(cx, |s, cx| s.set_disabled(disabled, cx));
+        }
+        self.notes.update(cx, |s, cx| s.set_disabled(disabled, cx));
+    }
+    /// Everything the user can change, as one comparable string.
+    fn fingerprint(&self, cx: &App) -> String {
+        let choice = |c: &Entity<ChoiceState>| {
+            c.read(cx)
+                .selected()
+                .map(|s| s.value.to_string())
+                .unwrap_or_default()
+        };
+        format!(
+            "{:?}|{:?}|{:?}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.start_date(cx),
+            self.end_date(cx),
+            self.start_time.read(cx).value(),
+            self.end_time.read(cx).value(),
+            self.title.read(cx).value(),
+            self.location.read(cx).value(),
+            self.link.read(cx).value(),
+            self.guests.read(cx).value(),
+            self.notes.read(cx).value(),
+            choice(&self.calendar),
+            choice(&self.repeat),
+            choice(&self.timezone),
+            self.all_day,
+            self.meeting,
+        )
+    }
+}
+
+/// Read a loosely typed time: "9", "930", "09:30", "9.30", "2pm", "12:15am".
+pub(super) fn parse_time(text: &str) -> Option<NaiveTime> {
+    let text = text.trim().to_ascii_lowercase();
+    let (text, meridiem) = if let Some(t) = text.strip_suffix("am") {
+        (t.trim(), Some(false))
+    } else if let Some(t) = text.strip_suffix("pm") {
+        (t.trim(), Some(true))
+    } else {
+        (text.as_str(), None)
+    };
+    let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty()
+        || text
+            .chars()
+            .any(|c| !c.is_ascii_digit() && c != ':' && c != '.')
+    {
+        return None;
+    }
+    let (hour, minute) = if text.contains([':', '.']) {
+        let (h, m) = text.split_once([':', '.'])?;
+        (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?)
+    } else {
+        match digits.len() {
+            1 | 2 => (digits.parse().ok()?, 0),
+            3 | 4 => {
+                let split = digits.len() - 2;
+                (digits[..split].parse().ok()?, digits[split..].parse().ok()?)
+            }
+            _ => return None,
+        }
+    };
+    let hour = match meridiem {
+        Some(_) if !(1..=12).contains(&hour) => return None,
+        Some(pm) => hour % 12 + if pm { 12 } else { 0 },
+        None => hour,
+    };
+    NaiveTime::from_hms_opt(hour, minute, 0)
+}
+
+/// "45 min", "1 h", "1 h 30 min" or "2 d".
+fn duration_label(d: Duration) -> String {
+    let minutes = d.num_minutes();
+    if minutes <= 0 {
+        String::new()
+    } else if minutes % 1440 == 0 {
+        format!("{} d", minutes / 1440)
+    } else if minutes < 60 {
+        format!("{minutes} min")
+    } else if minutes % 60 == 0 {
+        format!("{} h", minutes / 60)
+    } else {
+        format!("{} h {} min", minutes / 60, minutes % 60)
+    }
+}
 
 impl Ocal {
     pub(super) fn open_editor(
@@ -26,42 +205,57 @@ impl Ocal {
             .all_day
             .map(|(s, t)| (s, t - Duration::days(1)))
             .unwrap_or((start.date_naive(), end.date_naive()));
-        let values = vec![
-            e.title.clone(),
-            s.to_string(),
-            start.format("%H:%M").to_string(),
-            t.to_string(),
-            end.format("%H:%M").to_string(),
-            e.location.clone(),
-            e.link.clone(),
+        let mut text = |value: String, placeholder: &'static str, cx: &mut Context<Self>| {
+            let field = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(value)
+                    .placeholder(placeholder)
+            });
+            cx.subscribe(&field, |_, _, _: &InputEvent, cx| cx.notify())
+                .detach();
+            field
+        };
+        let title = text(e.title.clone(), "Event title", cx);
+        let location = text(e.location.clone(), "Add a location", cx);
+        let link = text(e.link.clone(), "https://…", cx);
+        let guests = text(
             e.attendees
                 .iter()
                 .map(|a| a.email.as_str())
                 .collect::<Vec<_>>()
                 .join(", "),
-            e.timezone.clone(),
-        ];
-        let fields: Vec<_> = values
-            .iter()
-            .enumerate()
-            .map(|(i, value)| {
-                cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .default_value(value.clone())
-                        .placeholder(match i {
-                            0 => "Event title",
-                            5 => "Add a location",
-                            6 => "https://…",
-                            7 => "Guests’ email addresses",
-                            _ => "",
-                        })
-                })
-            })
-            .collect();
-        for field in &fields {
-            cx.subscribe(field, |_, _, _: &InputEvent, cx| cx.notify())
-                .detach();
-        }
+            "Guests’ email addresses",
+            cx,
+        );
+        let start_time = text(start.format("%H:%M").to_string(), "09:00", cx);
+        let end_time = text(end.format("%H:%M").to_string(), "10:00", cx);
+        let mut picker = |date: NaiveDate, cx: &mut Context<Self>| {
+            let state = cx.new(|cx| DatePickerState::new(window, cx));
+            let calendar = state.read(cx).calendar.clone();
+            calendar.update(cx, |c, cx| c.set_date(date, window, cx));
+            cx.observe(&state, |_, _, cx| cx.notify()).detach();
+            state
+        };
+        let start_date = picker(s, cx);
+        let end_date = picker(t, cx);
+        // Moving the start keeps the event's length by moving the end with it.
+        cx.subscribe_in(
+            &start_time,
+            window,
+            |app, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    app.carry_end(window, cx);
+                }
+            },
+        )
+        .detach();
+        let start_calendar = start_date.read(cx).calendar.clone();
+        cx.subscribe_in(
+            &start_calendar,
+            window,
+            |app, _, _: &CalendarEvent, window, cx| app.carry_end(window, cx),
+        )
+        .detach();
         let calendars: Vec<_> = self
             .snapshot
             .calendars
@@ -82,16 +276,9 @@ impl Ocal {
                 .label("Calendar")
                 .default_selected(index)
         });
-        let repeats = [
-            Repeat::Never,
-            Repeat::Daily,
-            Repeat::Weekly,
-            Repeat::Monthly,
-            Repeat::Yearly,
-        ];
         let repeat = cx.new(|cx| {
             ChoiceState::new(
-                repeats
+                REPEATS
                     .iter()
                     .enumerate()
                     .map(|(i, r)| ChoiceItem::new(i.to_string(), r.label()))
@@ -100,25 +287,57 @@ impl Ocal {
                 cx,
             )
             .label("Repeat")
-            .default_selected(repeats.iter().position(|r| *r == e.repeat).unwrap_or(0))
+            .default_selected(REPEATS.iter().position(|r| *r == e.repeat).unwrap_or(0))
         });
-        cx.observe(&calendar, |_, _, cx| cx.notify()).detach();
-        cx.observe(&repeat, |_, _, cx| cx.notify()).detach();
+        // The event's own zone and the desktop zone lead the searchable list.
+        let mut zones = vec![e.timezone.clone(), system_zone()];
+        zones.extend(
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .map(|z| z.name().to_owned())
+                .filter(|z| z.contains('/') && !z.starts_with("Etc/")),
+        );
+        zones.push("UTC".into());
+        let mut seen = HashSet::new();
+        zones.retain(|z| seen.insert(z.clone()));
+        let timezone = cx.new(|cx| {
+            ChoiceState::new(
+                zones
+                    .iter()
+                    .map(|z| ChoiceItem::new(z.clone(), z.replace('_', " ")))
+                    .collect(),
+                window,
+                cx,
+            )
+            .label("Time zone")
+            .default_selected(0)
+        });
+        for choice in [&calendar, &repeat, &timezone] {
+            cx.observe(choice, |_, _, cx| cx.notify()).detach();
+        }
         let notes = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .rows(3)
+                .rows(4)
                 .default_value(e.notes.clone())
                 .placeholder("Add notes")
         });
         cx.subscribe(&notes, |_, _, _: &InputEvent, cx| cx.notify())
             .detach();
-        fields[0].update(cx, |s, cx| s.focus(window, cx));
+        title.update(cx, |s, cx| s.focus(window, cx));
         let all_day = e.all_day.is_some();
         let meeting = usize::from(!e.link.is_empty());
         self.form_scroll.set_offset(point(px(0.), px(0.)));
-        self.editor = Some(Editor {
+        let mut editor = Editor {
             base: e,
-            fields,
+            title,
+            location,
+            link,
+            guests,
+            start_time,
+            end_time,
+            start_date,
+            end_date,
+            timezone,
             notes,
             calendar,
             repeat,
@@ -129,10 +348,14 @@ impl Ocal {
             details: false,
             editing,
             discard: false,
-            initial: values,
+            initial: String::new(),
+            start_at: None,
             focus: cx.focus_handle(),
             last_focus: None,
-        });
+        };
+        editor.initial = editor.fingerprint(cx);
+        editor.start_at = editor.start(cx);
+        self.editor = Some(editor);
         self.selected = None;
         self.settings = false;
         self.help = false;
@@ -140,14 +363,84 @@ impl Ocal {
         self.error = false;
         cx.notify();
     }
+    /// Shift the end by however far the start just moved.
+    fn carry_end(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(f) = self.editor.as_mut() else {
+            return;
+        };
+        let (Some(before), Some(after)) = (f.start_at, f.start(cx)) else {
+            return;
+        };
+        if before == after {
+            return;
+        }
+        f.start_at = Some(after);
+        if let Some(end) = f.end(cx) {
+            let moved = end + (after - before);
+            let calendar = f.end_date.read(cx).calendar.clone();
+            calendar.update(cx, |c, cx| c.set_date(moved.date(), window, cx));
+            f.end_time.update(cx, |s, cx| {
+                s.set_value(moved.format("%H:%M").to_string(), window, cx)
+            });
+        }
+        cx.notify();
+    }
+    /// Arrow keys step a focused time field by 15 minutes.
+    fn step_time(
+        &mut self,
+        start: bool,
+        minutes: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(f) = self.editor.as_ref() else {
+            return;
+        };
+        let (field, date) = if start {
+            (f.start_time.clone(), f.start_date.clone())
+        } else {
+            (f.end_time.clone(), f.end_date.clone())
+        };
+        let Some(time) = parse_time(&field.read(cx).value()) else {
+            return;
+        };
+        // Snap to the quarter hour before stepping off it.
+        let minute = (time.num_seconds_from_midnight() / 60) as i64;
+        let snapped = if minute % 15 == 0 {
+            minute + minutes
+        } else if minutes > 0 {
+            minute + 15 - minute % 15
+        } else {
+            minute - minute % 15
+        };
+        let days = snapped.div_euclid(1440);
+        let next = NaiveTime::from_num_seconds_from_midnight_opt(
+            (snapped.rem_euclid(1440) * 60) as u32,
+            0,
+        )
+        .unwrap_or(time);
+        if days != 0
+            && let Some(d) = Editor::date(&date, cx)
+        {
+            let calendar = date.read(cx).calendar.clone();
+            calendar.update(cx, |c, cx| c.set_date(d + Duration::days(days), window, cx));
+        }
+        field.update(cx, |s, cx| {
+            s.set_value(next.format("%H:%M").to_string(), window, cx)
+        });
+        if start {
+            self.carry_end(window, cx);
+        }
+        cx.notify();
+    }
     pub(super) fn draft(&self, cx: &App) -> anyhow::Result<Event> {
         let f = self
             .editor
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No event editor"))?;
-        let value = |i: usize| f.fields[i].read(cx).value().trim().to_owned();
+        let value = |field: &Entity<InputState>| field.read(cx).value().trim().to_owned();
         let mut e = f.base.clone();
-        e.title = value(0);
+        e.title = value(&f.title);
         e.calendar = f
             .calendar
             .read(cx)
@@ -155,11 +448,18 @@ impl Ocal {
             .ok_or_else(|| anyhow::anyhow!("Choose a writable calendar"))?
             .value
             .to_string();
-        e.timezone = value(8);
-        let s = NaiveDate::parse_from_str(&value(1), "%Y-%m-%d")
-            .map_err(|_| anyhow::anyhow!("Use a start date like 2026-10-05"))?;
-        let t = NaiveDate::parse_from_str(&value(3), "%Y-%m-%d")
-            .map_err(|_| anyhow::anyhow!("Use an end date like 2026-10-05"))?;
+        e.timezone = f
+            .timezone
+            .read(cx)
+            .selected()
+            .map(|z| z.value.to_string())
+            .unwrap_or_else(|| f.base.timezone.clone());
+        let s = f
+            .start_date(cx)
+            .ok_or_else(|| anyhow::anyhow!("Choose a start date"))?;
+        let t = f
+            .end_date(cx)
+            .ok_or_else(|| anyhow::anyhow!("Choose an end date"))?;
         if f.all_day {
             e.all_day = Some((s, t + Duration::days(1)));
             e.start = s.and_hms_opt(0, 0, 0).unwrap().and_utc();
@@ -169,17 +469,19 @@ impl Ocal {
                 .and_utc();
         } else {
             e.all_day = None;
-            let start = NaiveTime::parse_from_str(&value(2), "%H:%M")
-                .map_err(|_| anyhow::anyhow!("Use a start time like 09:15"))?;
-            let end = NaiveTime::parse_from_str(&value(4), "%H:%M")
-                .map_err(|_| anyhow::anyhow!("Use an end time like 10:00"))?;
+            let start = f
+                .start_time(cx)
+                .ok_or_else(|| anyhow::anyhow!("Use a start time like 9:15 or 2pm"))?;
+            let end = f
+                .end_time(cx)
+                .ok_or_else(|| anyhow::anyhow!("Use an end time like 10:00 or 3pm"))?;
             e.start = local_datetime(s.and_time(start), &e.timezone)?;
             e.end = local_datetime(t.and_time(end), &e.timezone)?;
         }
-        e.location = value(5);
+        e.location = value(&f.location);
         e.notes = f.notes.read(cx).value().to_string();
         e.link = if f.meeting == 1 {
-            value(6)
+            value(&f.link)
         } else {
             String::new()
         };
@@ -205,7 +507,7 @@ impl Ocal {
                 "Choose a Google calendar that supports Meet"
             );
         }
-        e.attendees = value(7)
+        e.attendees = value(&f.guests)
             .split([',', ';'])
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -223,13 +525,7 @@ impl Ocal {
             })
             .collect();
         if e.series_id.is_none() {
-            e.repeat = [
-                Repeat::Never,
-                Repeat::Daily,
-                Repeat::Weekly,
-                Repeat::Monthly,
-                Repeat::Yearly,
-            ][f
+            e.repeat = REPEATS[f
                 .repeat
                 .read(cx)
                 .selected()
@@ -248,10 +544,7 @@ impl Ocal {
                 let notify = self.editor.as_ref().is_some_and(|f| f.notify);
                 self.busy = true;
                 if let Some(f) = &self.editor {
-                    for field in &f.fields {
-                        field.update(cx, |s, cx| s.set_disabled(true, cx));
-                    }
-                    f.notes.update(cx, |s, cx| s.set_disabled(true, cx));
+                    f.set_disabled(true, cx);
                 }
                 self.error = false;
                 self.status = "Saving…".into();
@@ -268,42 +561,16 @@ impl Ocal {
         if self.busy {
             return;
         }
-        if let Some(f) = &mut self.editor {
-            let dirty = f
-                .fields
-                .iter()
-                .enumerate()
-                .any(|(i, s)| s.read(cx).value().as_ref() != f.initial[i])
-                || f.notes.read(cx).value().as_ref() != f.base.notes
-                || f.all_day != f.base.all_day.is_some()
-                || f.meeting != usize::from(!f.base.link.is_empty())
-                || f.repeat
-                    .read(cx)
-                    .selected()
-                    .and_then(|s| s.value.parse::<usize>().ok())
-                    .unwrap_or(0)
-                    != [
-                        Repeat::Never,
-                        Repeat::Daily,
-                        Repeat::Weekly,
-                        Repeat::Monthly,
-                        Repeat::Yearly,
-                    ]
-                    .iter()
-                    .position(|r| *r == f.base.repeat)
-                    .unwrap_or(0)
-                || f.calendar
-                    .read(cx)
-                    .selected()
-                    .is_some_and(|s| s.value.as_ref() != f.base.calendar);
-            if dirty {
-                f.discard = true;
-                cx.notify();
-                return;
-            }
+        if let Some(f) = &mut self.editor
+            && f.fingerprint(cx) != f.initial
+        {
+            f.discard = true;
+            cx.notify();
+            return;
         }
         self.editor = None;
         self.selection.anchor = None;
+        self.error = false;
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -313,11 +580,12 @@ impl Ocal {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = cx.omarchy().clone();
+        let busy = self.busy;
         let Some(f) = self.editor.as_mut() else {
             return div().into_any_element();
         };
         let focused = f
-            .fields
+            .inputs()
             .iter()
             .position(|s| s.read(cx).focus_handle(cx).is_focused(window))
             .or_else(|| {
@@ -333,18 +601,41 @@ impl Ocal {
             None
         };
         f.last_focus = focused;
-        let field = |i: usize, window: &mut Window, cx: &mut Context<Self>| {
+        let f = self.editor.as_ref().unwrap();
+        let scroll = self.form_scroll.clone();
+        let field = |i: usize,
+                     state: &Entity<InputState>,
+                     selector: &'static str,
+                     window: &mut Window,
+                     cx: &mut Context<Self>| {
             reveal_field(
-                input(("editor-input", i), &f.fields[i], window, cx)
-                    .debug_selector(move || format!("editor-input-{i}"))
+                input(selector, state, window, cx)
+                    .debug_selector(move || selector.into())
                     .w_full()
-                    .border_0()
-                    .border_b_1()
+                    .py(rems(0.22))
+                    .border_1()
                     .border_color(t.divider())
                     .bg(t.background),
                 reveal == Some(i),
-                &self.form_scroll,
+                &scroll,
             )
+        };
+        let label = |text: &'static str| {
+            div()
+                .w(rems(4.2))
+                .flex_shrink_0()
+                .text_size(rems(0.72))
+                .text_color(t.secondary)
+                .child(text)
+        };
+        let line = |name: &'static str, content: AnyElement| {
+            div()
+                .flex()
+                .items_center()
+                .gap(rems(0.5))
+                .min_h(rems(2.))
+                .child(label(name))
+                .child(div().flex_1().min_w_0().child(content))
         };
         let selected_calendar = f
             .calendar
@@ -360,74 +651,136 @@ impl Ocal {
         let can_meet = self.snapshot.calendars.iter().any(|c| {
             c.id == selected_calendar && c.account.is_some() && c.meet_available && c.writable
         });
-        let target = cx.entity().downgrade();
-        let meeting_items = vec![
-            MenuItem::new("No meeting link").checked(f.meeting == 0),
-            MenuItem::new("Paste a meeting link")
-                .icon(IconName::Link)
-                .checked(f.meeting == 1),
-            MenuItem::new("Generate Google Meet")
-                .icon(IconName::Video)
-                .checked(f.meeting == 2)
-                .disabled(!can_meet),
-        ];
-        let meeting = menu(
-            "meeting-options",
-            button("meeting-trigger", "", ButtonVariant::Secondary, cx)
-                .debug_selector(|| "meeting-trigger".into())
-                .disabled(self.busy)
-                .w_full()
-                .border_0()
-                .justify_start()
-                .child(icon(IconName::Video).size(rems(0.9)))
+        let color = self.calendar_color(&selected_calendar, cx);
+        // A time field that steps by 15 minutes with the arrow keys.
+        let time = |start: bool, window: &mut Window, cx: &mut Context<Self>| {
+            let (i, state, selector) = if start {
+                (1, &f.start_time, "editor-start-time")
+            } else {
+                (2, &f.end_time, "editor-end-time")
+            };
+            div()
+                .w(rems(5.4))
+                .flex_shrink_0()
+                .capture_key_down(cx.listener(
+                    move |app, event: &gpui_kit::KeyDownEvent, window, cx| {
+                        let m = &event.keystroke.modifiers;
+                        if m.control || m.alt || m.shift || m.platform {
+                            return;
+                        }
+                        let step = match event.keystroke.key.as_str() {
+                            "up" => 15,
+                            "down" => -15,
+                            _ => return,
+                        };
+                        app.step_time(start, step, window, cx);
+                        cx.stop_propagation();
+                    },
+                ))
+                .child(field(i, state, selector, window, cx))
+        };
+        let when = |start: bool, window: &mut Window, cx: &mut Context<Self>| {
+            let picker = if start { &f.start_date } else { &f.end_date };
+            div()
+                .flex()
+                .gap(rems(0.4))
                 .child(
-                    [
-                        "Add a meeting link",
-                        "Use a meeting link",
-                        "Generate Google Meet",
-                    ][f.meeting],
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .debug_selector(move || {
+                            if start {
+                                "editor-start-date"
+                            } else {
+                                "editor-end-date"
+                            }
+                            .into()
+                        })
+                        .child(date_picker(
+                            if start { "start-date" } else { "end-date" },
+                            picker,
+                            cx,
+                        )),
                 )
-                .child(icon(IconName::ChevronDown).size(rems(0.7))),
-            meeting_items,
-            move |index, window, cx| {
-                let _ = target.update(cx, |app, cx| {
-                    if !app.busy {
+                .children((!f.all_day).then(|| time(start, window, cx)))
+                .into_any_element()
+        };
+        let length = (!f.all_day)
+            .then(|| Some(f.end(cx)? - f.start(cx)?))
+            .flatten()
+            .map(duration_label)
+            .unwrap_or_default();
+        let meeting = div()
+            .flex()
+            .h(rems(1.8))
+            .border_1()
+            .border_color(t.divider())
+            .children(MEETINGS.into_iter().enumerate().map(|(i, name)| {
+                let active = f.meeting == i;
+                button(("meeting", i), name, ButtonVariant::Secondary, cx)
+                    .debug_selector(move || format!("meeting-{i}"))
+                    .relative()
+                    .flex_1()
+                    .h_full()
+                    .border_0()
+                    .text_size(rems(0.72))
+                    .disabled(busy || (i == 2 && !can_meet))
+                    .bg(if active {
+                        t.selection
+                    } else {
+                        t.foreground.opacity(0.)
+                    })
+                    .text_color(if active { t.bright } else { t.secondary })
+                    .children(active.then(|| {
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(2.))
+                            .bg(t.accent)
+                    }))
+                    .on_click(cx.listener(move |app, _, window, cx| {
                         if let Some(f) = &mut app.editor {
-                            f.meeting = index;
-                            if index == 1 {
-                                f.fields[6].update(cx, |s, cx| s.focus(window, cx));
+                            f.meeting = i;
+                            if i == 1 {
+                                f.link.update(cx, |s, cx| s.focus(window, cx));
                             }
                         }
                         cx.notify();
-                    }
-                });
-            },
-        );
-        let calendar = if self.busy {
-            div()
-                .child(
-                    f.calendar
-                        .read(cx)
-                        .selected()
-                        .map(|s| s.label.clone())
-                        .unwrap_or_default(),
-                )
-                .into_any_element()
-        } else {
-            select("editor-calendar", &f.calendar, window, cx).into_any_element()
-        };
-        let repeats = if self.busy {
-            div()
-                .child(
-                    f.repeat
-                        .read(cx)
-                        .selected()
-                        .map(|s| s.label.clone())
-                        .unwrap_or_default(),
-                )
-                .into_any_element()
-        } else {
-            select("editor-repeat", &f.repeat, window, cx).into_any_element()
+                    }))
+            }));
+        let calendar = div()
+            .flex()
+            .items_center()
+            .gap(rems(0.5))
+            .child(swatch(color, true))
+            .child(div().flex_1().min_w_0().child(if busy {
+                div()
+                    .child(
+                        f.calendar
+                            .read(cx)
+                            .selected()
+                            .map(|s| s.label.clone())
+                            .unwrap_or_default(),
+                    )
+                    .into_any_element()
+            } else {
+                select("editor-calendar", &f.calendar, window, cx).into_any_element()
+            }));
+        let all_day = {
+            let target = cx.entity().downgrade();
+            switch("all-day", "All day", f.all_day, cx)
+                .debug_selector(|| "all-day".into())
+                .disabled(busy)
+                .on_change(move |checked, _, _, cx| {
+                    let _ = target.update(cx, |app, cx| {
+                        if let Some(f) = &mut app.editor {
+                            f.all_day = checked;
+                        }
+                        cx.notify();
+                    });
+                })
         };
         let mut body = div()
             .id("editor-scroll")
@@ -437,72 +790,95 @@ impl Ocal {
             .overflow_y_scroll()
             .track_scroll(&self.form_scroll)
             .px(rems(1.))
-            .py(rems(0.5))
+            .pb(rems(1.))
             .flex()
             .flex_col()
-            .gap(rems(0.75))
-            .child(field(0, window, cx))
-            .child(row("Calendar", calendar, cx))
-            .child(
-                button("all-day", "All day", ButtonVariant::Secondary, cx)
-                    .child(
-                        icon(if f.all_day {
-                            IconName::SquareCheck
-                        } else {
-                            IconName::Square
-                        })
-                        .size(rems(0.9)),
-                    )
-                    .disabled(self.busy)
+            .gap(rems(0.55))
+            .child(reveal_field(
+                input("editor-title", &f.title, window, cx)
+                    .debug_selector(|| "editor-title".into())
+                    .w_full()
+                    .text_size(rems(1.05))
                     .border_0()
-                    .justify_start()
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        if let Some(f) = &mut app.editor {
-                            f.all_day = !f.all_day;
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(row(
+                    .border_b_1()
+                    .border_color(t.divider())
+                    .bg(t.background),
+                reveal == Some(0),
+                &scroll,
+            ))
+            .child(line("Calendar", calendar.into_any_element()))
+            .child(line("", all_day.into_any_element()))
+            .child(line(
                 if f.base.task { "Due" } else { "Starts" },
-                div()
-                    .flex()
-                    .gap(rems(0.4))
-                    .child(div().flex_1().min_w_0().child(field(1, window, cx)))
-                    .children((!f.all_day).then(|| div().w(rems(5.2)).child(field(2, window, cx))))
-                    .into_any_element(),
-                cx,
+                when(true, window, cx),
             ));
         if !f.base.task {
-            body = body.child(row(
-                "Ends",
-                div()
-                    .flex()
-                    .gap(rems(0.4))
-                    .child(div().flex_1().min_w_0().child(field(3, window, cx)))
-                    .children((!f.all_day).then(|| div().w(rems(5.2)).child(field(4, window, cx))))
-                    .into_any_element(),
-                cx,
-            ));
-        }
-        body = body.child(field(5, window, cx)).child(meeting);
-        if f.meeting == 1 {
-            body = body.child(field(6, window, cx));
-        } else if f.meeting == 2 {
-            body = body.child(
-                div()
-                    .text_size(rems(0.68))
-                    .text_color(t.secondary)
-                    .whitespace_normal()
-                    .child("Google will create a Meet link when you save."),
+            body = body.child(line("Ends", when(false, window, cx))).children(
+                (!length.is_empty()).then(|| {
+                    div()
+                        .pl(rems(4.7))
+                        .text_size(rems(0.68))
+                        .text_color(t.secondary)
+                        .child(length.clone())
+                }),
             );
+        }
+        body = body.child(line(
+            "Location",
+            field(3, &f.location, "editor-location", window, cx).into_any_element(),
+        ));
+        if !f.base.task {
+            body = body.child(line("Meeting", meeting.into_any_element()));
+            if f.meeting == 1 {
+                body = body.child(line(
+                    "",
+                    field(4, &f.link, "editor-link", window, cx).into_any_element(),
+                ));
+            } else if f.meeting == 2 {
+                body = body.child(line(
+                    "",
+                    div()
+                        .text_size(rems(0.7))
+                        .text_color(t.secondary)
+                        .whitespace_normal()
+                        .child("Google creates the Meet link when you save.")
+                        .into_any_element(),
+                ));
+            }
+        }
+        if google && !f.base.task {
+            body = body.child(line(
+                "Guests",
+                field(5, &f.guests, "editor-guests", window, cx).into_any_element(),
+            ));
+            if !f.guests.read(cx).value().is_empty() {
+                let target = cx.entity().downgrade();
+                body = body.child(line(
+                    "",
+                    switch("notify-guests", "Email guests", f.notify, cx)
+                        .debug_selector(|| "notify-guests".into())
+                        .disabled(busy)
+                        .on_change(move |checked, _, _, cx| {
+                            let _ = target.update(cx, |app, cx| {
+                                if let Some(f) = &mut app.editor {
+                                    f.notify = checked;
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .into_any_element(),
+                ));
+            }
         }
         if f.base.series_id.is_some() {
             body = body.child(
                 div()
-                    .text_size(rems(0.68))
+                    .flex()
+                    .gap(rems(0.5))
+                    .items_center()
+                    .text_size(rems(0.7))
                     .text_color(t.secondary)
-                    .whitespace_normal()
+                    .child(icon(IconName::Repeat).size(rems(0.8)))
                     .child(if f.base.remote_id.is_some() {
                         "Changes apply to this occurrence."
                     } else {
@@ -510,163 +886,144 @@ impl Ocal {
                     }),
             );
         }
-        if google && !f.base.task {
-            body = body.child(field(7, window, cx));
-            if !f.fields[7].read(cx).value().is_empty() {
-                body = body.child(
-                    button(
-                        "notify-guests",
-                        if f.notify {
-                            "Notify guests ✓"
-                        } else {
-                            "Do not notify guests"
-                        },
-                        ButtonVariant::Secondary,
-                        cx,
-                    )
-                    .disabled(self.busy)
-                    .border_0()
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        if let Some(f) = &mut app.editor {
-                            f.notify = !f.notify;
-                        }
-                        cx.notify();
-                    })),
-                );
-            }
-        }
         body = body.child(
-            button(
-                "more-details",
-                if f.details {
-                    "Fewer details"
-                } else {
-                    "More details"
-                },
-                ButtonVariant::Secondary,
-                cx,
-            )
-            .disabled(self.busy)
-            .border_0()
-            .justify_start()
-            .child(
-                icon(if f.details {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .size(rems(0.7)),
-            )
-            .on_click(cx.listener(|app, _, _, cx| {
-                if let Some(f) = &mut app.editor {
-                    f.details = !f.details;
-                }
-                cx.notify();
-            })),
+            button("more-details", "", ButtonVariant::Secondary, cx)
+                .debug_selector(|| "more-details".into())
+                .disabled(busy)
+                .mt(rems(0.3))
+                .h(rems(1.8))
+                .border_0()
+                .border_t_1()
+                .border_color(t.divider())
+                .justify_start()
+                .gap(rems(0.4))
+                .bg(t.foreground.opacity(0.))
+                .text_size(rems(0.62))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.secondary)
+                .child(
+                    icon(if f.details {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .size(rems(0.75)),
+                )
+                .child("MORE DETAILS")
+                .on_click(cx.listener(|app, _, _, cx| {
+                    if let Some(f) = &mut app.editor {
+                        f.details = !f.details;
+                    }
+                    cx.notify();
+                })),
         );
         if f.details {
             if f.base.series_id.is_none() {
-                body = body.child(row("Repeat", repeats, cx));
+                body = body.child(line(
+                    "Repeat",
+                    if busy {
+                        div().into_any_element()
+                    } else {
+                        select("editor-repeat", &f.repeat, window, cx).into_any_element()
+                    },
+                ));
             }
             body = body
-                .child(row("Time zone", field(8, window, cx), cx))
+                .child(line(
+                    "Time zone",
+                    combobox("editor-timezone", &f.timezone, window, cx).into_any_element(),
+                ))
                 .child(reveal_field(
                     textarea("editor-notes", &f.notes, window, cx)
-                        .disabled(self.busy)
+                        .debug_selector(|| "editor-notes".into())
+                        .disabled(busy)
                         .w_full()
-                        .border_0()
+                        .border_1()
+                        .border_color(t.divider())
                         .bg(t.background),
                     reveal == Some(9),
-                    &self.form_scroll,
+                    &scroll,
                 ));
         }
-        if self.error {
-            body = body.child(
-                div()
-                    .text_color(t.danger)
-                    .text_size(rems(0.72))
-                    .whitespace_normal()
-                    .child(self.status.clone()),
-            );
-        }
-        let title = if f.editing {
-            if f.base.task {
-                "Edit task"
-            } else {
-                "Edit event"
-            }
-        } else if f.base.task {
-            "New task"
-        } else {
-            "New event"
+        let title = match (f.editing, f.base.task) {
+            (true, true) => "Edit task",
+            (true, false) => "Edit event",
+            (false, true) => "New task",
+            (false, false) => "New event",
         };
-        let save_label = if self.busy {
+        let save_label = if busy {
             "Saving…"
-        } else if google && f.notify && !f.fields[7].read(cx).value().trim().is_empty() {
+        } else if google && f.notify && !f.guests.read(cx).value().trim().is_empty() {
             "Save & invite"
         } else {
             "Save"
         };
-        let discard = f.discard;
-        let footer = if discard {
+        let error = (self.error && !busy).then(|| {
+            div()
+                .debug_selector(|| "editor-error".into())
+                .px(rems(1.))
+                .py(rems(0.5))
+                .border_t_1()
+                .border_color(t.danger.opacity(0.5))
+                .text_color(t.danger)
+                .text_size(rems(0.72))
+                .whitespace_normal()
+                .child(self.status.clone())
+        });
+        let footer = if f.discard {
             div()
                 .p(rems(1.))
                 .border_t_1()
                 .border_color(t.divider())
                 .flex()
-                .flex_col()
-                .gap(rems(0.6))
+                .items_center()
+                .gap(rems(0.5))
+                .child(div().flex_1().child("Discard unsaved changes?"))
                 .child(
-                    div()
-                        .text_size(rems(0.75))
-                        .child("Discard your unsaved changes?"),
+                    button("discard-editor", "Discard", ButtonVariant::Secondary, cx)
+                        .text_color(t.danger)
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.editor = None;
+                            app.selection.anchor = None;
+                            app.error = false;
+                            window.focus(&app.focus, cx);
+                            cx.notify();
+                        })),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .gap(rems(0.5))
-                        .child(
-                            button("keep-editing", "Keep editing", ButtonVariant::Primary, cx)
-                                .on_click(cx.listener(|app, _, _, cx| {
-                                    if let Some(f) = &mut app.editor {
-                                        f.discard = false;
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            button("discard-editor", "Discard", ButtonVariant::Secondary, cx)
-                                .text_color(t.danger)
-                                .on_click(cx.listener(|app, _, window, cx| {
-                                    app.editor = None;
-                                    app.selection.anchor = None;
-                                    window.focus(&app.focus, cx);
-                                    cx.notify();
-                                })),
-                        ),
+                    button("keep-editing", "Keep editing", ButtonVariant::Primary, cx).on_click(
+                        cx.listener(|app, _, _, cx| {
+                            if let Some(f) = &mut app.editor {
+                                f.discard = false;
+                            }
+                            cx.notify();
+                        }),
+                    ),
                 )
         } else {
             div()
-                .p(rems(1.))
+                .px(rems(1.))
+                .h(rems(3.))
                 .border_t_1()
                 .border_color(t.divider())
                 .flex()
-                .justify_between()
                 .items_center()
-                .child(
-                    div()
-                        .text_size(rems(0.65))
-                        .text_color(t.secondary)
-                        .child("Ctrl Enter to save"),
-                )
+                .gap(rems(0.4))
+                .text_size(rems(0.68))
+                .text_color(t.secondary)
+                .child(keycaps(["ctrl", "↵"], cx))
+                .child("save")
+                .child(div().w(rems(0.4)))
+                .child(keycaps(["esc"], cx))
+                .child("close")
+                .child(div().flex_1())
                 .child(
                     button("save-event", save_label, ButtonVariant::Primary, cx)
                         .debug_selector(|| "save-event".into())
-                        .disabled(self.busy)
+                        .disabled(busy)
                         .on_click(cx.listener(|app, _, _, cx| app.save(cx))),
                 )
         };
-        let f = self.editor.as_ref().unwrap();
         focus_scope("event-editor")
             .debug_selector(|| "event-editor".into())
             .role(gpui_kit::Role::Dialog)
@@ -674,26 +1031,14 @@ impl Ocal {
             .key_context("EventEditor")
             .track_focus(&f.focus)
             .absolute()
-            .right(px(12.))
-            .top(rems(4.5))
-            .w(rems(28.))
-            .max_w(window.viewport_size().width - px(24.))
-            .h(
-                (window.viewport_size().height - rems(6.).to_pixels(window.rem_size())).min(
-                    rems(if f.details {
-                        42.
-                    } else if f.meeting > 0 {
-                        33.
-                    } else {
-                        29.
-                    })
-                    .to_pixels(window.rem_size()),
-                ),
-            )
-            .min_h(px(120.))
+            .right_0()
+            .top(rems(HEADER))
+            .bottom(rems(STATUS))
+            .w(rems(26.))
+            .max_w(window.viewport_size().width)
             .flex()
             .flex_col()
-            .border_1()
+            .border_l_1()
             .border_color(t.control_border())
             .bg(t.background)
             .shadow_lg()
@@ -701,43 +1046,67 @@ impl Ocal {
             .child(
                 div()
                     .px(rems(1.))
-                    .py(rems(0.75))
+                    .h(rems(2.6))
                     .flex_shrink_0()
                     .flex()
-                    .justify_between()
                     .items_center()
+                    .gap(rems(0.5))
+                    .child(div().w(px(3.)).h(rems(1.1)).bg(color))
                     .child(
                         div()
+                            .flex_1()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(rems(0.9))
+                            .text_color(t.bright)
                             .child(title),
                     )
                     .child(
                         tool_button("close-editor", IconName::X, "Close editor", "Esc", cx)
-                            .disabled(self.busy)
+                            .disabled(busy)
                             .on_click(
                                 cx.listener(|app, _, window, cx| app.close_editor(window, cx)),
                             ),
                     ),
             )
             .child(body)
+            .children(error)
             .child(footer.flex_shrink_0())
             .into_any_element()
     }
 }
-pub(super) fn row(label: &'static str, content: AnyElement, cx: &App) -> AnyElement {
-    div()
-        .flex()
-        .items_center()
-        .gap(rems(0.6))
-        .child(
-            div()
-                .w(rems(4.2))
-                .flex_shrink_0()
-                .text_size(rems(0.72))
-                .text_color(cx.omarchy().secondary)
-                .child(label),
-        )
-        .child(div().flex_1().min_w_0().child(content))
-        .into_any_element()
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loose_times_parse_and_bad_ones_are_rejected() {
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0);
+        for (text, expected) in [
+            ("9", hm(9, 0)),
+            ("09:30", hm(9, 30)),
+            ("930", hm(9, 30)),
+            ("1415", hm(14, 15)),
+            ("9.45", hm(9, 45)),
+            ("2pm", hm(14, 0)),
+            ("12am", hm(0, 0)),
+            ("12:30 pm", hm(12, 30)),
+            (" 7:05AM ", hm(7, 5)),
+            ("24:00", None),
+            ("13pm", None),
+            ("9:75", None),
+            ("noon", None),
+            ("", None),
+        ] {
+            assert_eq!(parse_time(text), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(duration_label(Duration::minutes(45)), "45 min");
+        assert_eq!(duration_label(Duration::minutes(60)), "1 h");
+        assert_eq!(duration_label(Duration::minutes(90)), "1 h 30 min");
+        assert_eq!(duration_label(Duration::days(2)), "2 d");
+        assert_eq!(duration_label(Duration::minutes(-5)), "");
+    }
 }

@@ -14,7 +14,7 @@ use crate::{
     menus::{ContextTarget, menu},
     worker::{Command, Event as WorkerEvent, Worker},
 };
-use chrono::{Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use chrono_tz::Tz;
 use gpui_kit::base::{
     ElementExt as _,
@@ -148,23 +148,7 @@ pub(super) struct Layout {
 }
 /// Below this width the grid shows one day and the search moves under the heading.
 const COMPACT: f32 = 640.;
-struct Editor {
-    base: Event,
-    fields: Vec<Entity<InputState>>,
-    notes: Entity<TextareaState>,
-    calendar: Entity<ChoiceState>,
-    repeat: Entity<ChoiceState>,
-    all_day: bool,
-    meeting: usize,
-    meet_request: String,
-    notify: bool,
-    details: bool,
-    editing: bool,
-    discard: bool,
-    initial: Vec<String>,
-    focus: FocusHandle,
-    last_focus: Option<usize>,
-}
+use editor::Editor;
 
 pub struct Ocal {
     snapshot: Snapshot,
@@ -207,6 +191,8 @@ pub struct Ocal {
     initial_grid_scroll: bool,
     /// Scroll the grid to the current time on the next frame.
     scroll_to_now: bool,
+    /// Open the new-event editor once calendars have loaded (`--new`).
+    pending_new: bool,
     slot_anchor: f32,
 }
 impl Ocal {
@@ -284,6 +270,7 @@ impl Ocal {
             month_cell_height: px(100.),
             initial_grid_scroll: true,
             scroll_to_now: false,
+            pending_new: false,
             slot_anchor: 0.5,
         }
     }
@@ -338,10 +325,7 @@ impl Ocal {
                 self.error = true;
                 self.busy = false;
                 if let Some(f) = &self.editor {
-                    for field in &f.fields {
-                        field.update(cx, |s, cx| s.set_disabled(false, cx));
-                    }
-                    f.notes.update(cx, |s, cx| s.set_disabled(false, cx));
+                    f.set_disabled(false, cx);
                 }
             }
             WorkerEvent::Saved(saved) => {
@@ -385,6 +369,16 @@ impl Ocal {
     }
     pub fn set_view(&mut self, view: View) {
         self.view = view;
+    }
+    /// Open a new event at the next quarter hour as soon as calendars load.
+    pub fn new_on_launch(&mut self) {
+        let now = Utc::now().with_timezone(&self.tz());
+        let minute = (now.hour() * 60 + now.minute()) as i64;
+        let slot = Slot::new(now.date_naive(), 0).moved(0, (minute / 15 + 1) * 15);
+        self.date = slot.day;
+        self.selection = Selection::new(slot.day);
+        self.selection.cursor = slot;
+        self.pending_new = true;
     }
     fn layout(&self, window: &Window) -> Layout {
         let width = window.viewport_size().width;
@@ -713,6 +707,10 @@ impl Render for Ocal {
         window.set_rem_size(px(16. * self.zoom));
         let t = cx.omarchy().clone();
         let layout = self.layout(window);
+        if self.pending_new && !self.snapshot.calendars.is_empty() {
+            self.pending_new = false;
+            self.new_event(false, window, cx);
+        }
         // An empty search folds back into its header button once it loses focus.
         if self.search_open
             && self.search.read(cx).value().is_empty()
