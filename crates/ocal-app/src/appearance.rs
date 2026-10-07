@@ -110,7 +110,6 @@ pub fn day_number(
         .flex()
         .items_center()
         .justify_center()
-        .rounded_full()
         .text_size(size)
         .when(today, |d| {
             d.bg(t.accent)
@@ -119,4 +118,86 @@ pub fn day_number(
         })
         .when(!today, |d| d.text_color(color))
         .child(day.to_string())
+}
+
+/// An uppercase sidebar or page section label.
+pub fn section_label(text: &'static str, cx: &App) -> gpui_kit::Div {
+    div()
+        .px(rems(0.75))
+        .pt(rems(1.))
+        .pb(rems(0.35))
+        .text_size(rems(0.62))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(cx.omarchy().secondary)
+        .child(text)
+}
+
+/// A full-width list row; the active row gets the selection fill and an accent bar.
+pub fn nav_row(id: impl Into<ElementId>, active: bool, cx: &App) -> Button {
+    let t = cx.omarchy();
+    button(id, "", ButtonVariant::Secondary, cx)
+        .relative()
+        .w_full()
+        .h(rems(1.9))
+        .px(rems(0.75))
+        .gap(rems(0.6))
+        .justify_start()
+        .border_0()
+        .text_size(rems(0.78))
+        .bg(if active {
+            t.selection
+        } else {
+            t.foreground.opacity(0.)
+        })
+        .hover(|s| s.bg(t.hover_fill()))
+        .children(active.then(|| {
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(gpui_kit::px(2.))
+                .bg(t.accent)
+        }))
+}
+
+/// A square calendar colour swatch, outlined when the calendar is hidden.
+pub fn swatch(color: gpui_kit::Hsla, filled: bool) -> gpui_kit::Div {
+    div()
+        .size(rems(0.7))
+        .flex_shrink_0()
+        .border_1()
+        .border_color(color)
+        .when(filled, |d| d.bg(color))
+}
+
+/// A centred icon, title and explanation for an empty view.
+pub fn empty_state(
+    glyph: IconName,
+    title: &'static str,
+    detail: &'static str,
+    cx: &App,
+) -> gpui_kit::Div {
+    let t = cx.omarchy();
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(rems(0.5))
+        .p(rems(2.))
+        .text_center()
+        .child(
+            icon(glyph)
+                .size(rems(1.8))
+                .text_color(t.secondary.opacity(0.7)),
+        )
+        .child(div().text_color(t.bright).child(title))
+        .child(
+            div()
+                .max_w(rems(18.))
+                .text_size(rems(0.73))
+                .text_color(t.secondary)
+                .whitespace_normal()
+                .child(detail),
+        )
 }

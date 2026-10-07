@@ -33,7 +33,8 @@ gpui_kit::assets::icon_assets!(
         Download,
         Upload,
         CalendarCheck,
-        CircleQuestionMark
+        CircleQuestionMark,
+        Layers
     ]
 );
 pub struct Assets;

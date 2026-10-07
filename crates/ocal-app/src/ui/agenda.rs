@@ -1,5 +1,6 @@
 //! Agenda and task lists.
 use super::*;
+use crate::appearance::empty_state;
 
 impl Ocal {
     pub(super) fn event_chip(
@@ -160,17 +161,21 @@ impl Ocal {
                     })),
             );
         if events.is_empty() {
-            view = view.child(
-                div()
-                    .py(rems(3.))
-                    .text_center()
-                    .text_color(t.secondary)
-                    .child(if tasks {
-                        "No tasks here. Add one when you need it."
-                    } else {
-                        "No events here. A little breathing room."
-                    }),
-            );
+            view = view.child(if tasks {
+                empty_state(
+                    IconName::SquareCheck,
+                    "No tasks",
+                    "Add one from the context menu or with C in a local calendar.",
+                    cx,
+                )
+            } else {
+                empty_state(
+                    IconName::CalendarCheck,
+                    "Nothing scheduled",
+                    "A little breathing room. Press C to add an event.",
+                    cx,
+                )
+            });
         }
         view.into_any_element()
     }

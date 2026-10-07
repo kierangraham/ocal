@@ -1,4 +1,5 @@
 mod agenda;
+mod chrome;
 mod details;
 mod editor;
 mod grid;
@@ -121,6 +122,20 @@ const HOUR: f32 = 3.2;
 /// Below this width the sidebar becomes an overlay. A half-width Hyprland tile on a
 /// 1080p-class display is about 850 logical pixels, so it keeps the full week.
 const NARROW: f32 = 920.;
+/// From this width the search field stays open in the header.
+const WIDE: f32 = 1100.;
+const SIDEBAR: f32 = 15.;
+const HEADER: f32 = 2.7;
+const STATUS: f32 = 1.8;
+/// Width-dependent layout decisions, resolved once per frame.
+#[derive(Clone, Copy)]
+pub(super) struct Layout {
+    /// The sidebar can sit beside the content rather than over it.
+    sidebar: bool,
+    /// One-day grid and a view menu instead of the segmented control.
+    compact: bool,
+    wide: bool,
+}
 /// Below this width the grid shows one day and the search moves under the heading.
 const COMPACT: f32 = 640.;
 struct Editor {
@@ -162,6 +177,9 @@ pub struct Ocal {
     cancel_sign_in: Arc<AtomicBool>,
     help: bool,
     sidebar_open: bool,
+    /// The user hid the docked sidebar in a wide window.
+    sidebar_hidden: bool,
+    search_open: bool,
     active_set: Option<String>,
     grid_scroll: ScrollHandle,
     form_scroll: ScrollHandle,
@@ -177,6 +195,8 @@ pub struct Ocal {
     restore_focus: bool,
     month_cell_height: Pixels,
     initial_grid_scroll: bool,
+    /// Scroll the grid to the current time on the next frame.
+    scroll_to_now: bool,
     slot_anchor: f32,
 }
 impl Ocal {
@@ -236,6 +256,8 @@ impl Ocal {
             cancel_sign_in: worker.cancel_sign_in,
             help: false,
             sidebar_open: false,
+            sidebar_hidden: false,
+            search_open: false,
             active_set: None,
             grid_scroll: ScrollHandle::new(),
             form_scroll: ScrollHandle::new(),
@@ -251,6 +273,7 @@ impl Ocal {
             restore_focus: false,
             month_cell_height: px(100.),
             initial_grid_scroll: true,
+            scroll_to_now: false,
             slot_anchor: 0.5,
         }
     }
@@ -349,6 +372,54 @@ impl Ocal {
     }
     fn dispatch(&self, command: Command) {
         let _ = self.commands.send(command);
+    }
+    fn layout(&self, window: &Window) -> Layout {
+        let width = window.viewport_size().width;
+        Layout {
+            sidebar: width >= px(NARROW * self.zoom),
+            compact: width < px(COMPACT * self.zoom),
+            wide: width >= px(WIDE * self.zoom),
+        }
+    }
+    fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() {
+            return;
+        }
+        if self.layout(window).sidebar {
+            self.sidebar_hidden = !self.sidebar_hidden;
+            self.sidebar_open = false;
+        } else {
+            self.sidebar_open = !self.sidebar_open;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+    fn today(&self) -> NaiveDate {
+        Utc::now().with_timezone(&self.tz()).date_naive()
+    }
+    fn go_today(&mut self, cx: &mut Context<Self>) {
+        let today = self.today();
+        self.choose_date(today, cx);
+        self.scroll_to_now = true;
+    }
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() {
+            return;
+        }
+        self.search_open = true;
+        self.search.update(cx, |s, cx| s.focus(window, cx));
+        cx.notify();
+    }
+    fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() {
+            return;
+        }
+        self.settings = true;
+        self.help = false;
+        self.selected = None;
+        self.sidebar_open = false;
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
     fn tz(&self) -> Tz {
         zone(&self.display_zone)
@@ -529,6 +600,7 @@ impl Ocal {
             self.selection.anchor = None;
         } else {
             self.search.update(cx, |s, cx| s.set_value("", window, cx));
+            self.search_open = false;
         }
         self.dragging = false;
         window.focus(&self.focus, cx);
@@ -627,238 +699,14 @@ impl Render for Ocal {
         }
         window.set_rem_size(px(16. * self.zoom));
         let t = cx.omarchy().clone();
-        let narrow = window.viewport_size().width < px(NARROW * self.zoom);
-        let compact = window.viewport_size().width < px(COMPACT * self.zoom);
-        let target = cx.entity().downgrade();
-        let more = menu(
-            "app-menu",
-            tool_button(
-                "app-actions",
-                IconName::Ellipsis,
-                "Calendar options",
-                "",
-                cx,
-            ),
-            vec![
-                MenuItem::new("Settings").icon(IconName::Settings),
-                MenuItem::new("Import iCalendar…").icon(IconName::Upload),
-                MenuItem::new("Export visible calendars…").icon(IconName::Download),
-                MenuItem::new("Keyboard shortcuts")
-                    .separator_before()
-                    .icon(IconName::CircleQuestionMark)
-                    .shortcut("?"),
-            ],
-            move |index, window, cx| {
-                let _ = target.update(cx, |app, cx| {
-                    if app.editor.is_some() {
-                        return;
-                    }
-                    match index {
-                        0 => {
-                            app.settings = true;
-                            app.help = false;
-                            app.selected = None;
-                            window.focus(&app.focus, cx);
-                        }
-                        1 => app.dispatch(Command::Import),
-                        2 => app.dispatch(Command::Export(
-                            app.snapshot
-                                .events
-                                .iter()
-                                .filter(|e| app.visible(&e.calendar))
-                                .cloned()
-                                .collect(),
-                        )),
-                        _ => {
-                            app.help = true;
-                            app.settings = false;
-                            app.selected = None;
-                        }
-                    }
-                    cx.notify();
-                });
-            },
-        );
-        let toolbar = div()
-            .h(rems(3.2))
-            .flex_shrink_0()
-            .px(rems(0.85))
-            .border_b_1()
-            .border_color(t.divider())
-            .bg(t.inset)
-            .flex()
-            .items_center()
-            .gap(rems(0.5))
-            .children((!narrow).then(|| {
-                div()
-                    .w(rems(14.8))
-                    .flex_shrink_0()
-                    .flex()
-                    .gap(rems(0.6))
-                    .items_center()
-                    .child(
-                        icon(IconName::CalendarRange)
-                            .size(rems(1.05))
-                            .text_color(t.accent),
-                    )
-                    .child("Ocal")
-            }))
-            .children(narrow.then(|| {
-                tool_button("toggle-sidebar", IconName::PanelLeft, "Calendars", "B", cx).on_click(
-                    cx.listener(|app, _, window, cx| {
-                        if app.editor.is_none() {
-                            app.sidebar_open = !app.sidebar_open;
-                            window.focus(&app.focus, cx);
-                            cx.notify();
-                        }
-                    }),
-                )
-            }))
-            .child(
-                tool_button("new-event", IconName::Plus, "New event", "C", cx)
-                    .on_click(cx.listener(|app, _, window, cx| app.new_event(false, window, cx))),
-            )
-            .child(
-                tool_button(
-                    "previous",
-                    IconName::ChevronLeft,
-                    "Previous period",
-                    "[",
-                    cx,
-                )
-                .on_click(cx.listener(|app, _, _, cx| app.navigate(-1, cx))),
-            )
-            .child(
-                button("today", "Today", ButtonVariant::Secondary, cx)
-                    .border_0()
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        app.choose_date(Utc::now().with_timezone(&app.tz()).date_naive(), cx)
-                    })),
-            )
-            .child(
-                tool_button("next", IconName::ChevronRight, "Next period", "]", cx)
-                    .on_click(cx.listener(|app, _, _, cx| app.navigate(1, cx))),
-            )
-            .child(div().flex_1().min_w_0())
-            .children((!compact).then(|| {
-                input("search", &self.search, window, cx)
-                    .w(rems(18.))
-                    .min_w(rems(9.))
-                    .flex_shrink(1.)
-                    .border_0()
-                    .bg(t.surface)
-            }))
-            .child(
-                tool_button("sync", IconName::RefreshCw, "Sync calendars", "Ctrl R", cx)
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        app.dispatch(Command::Sync(app.date));
-                        app.status = "Syncing…".into();
-                        cx.notify();
-                    })),
-            )
-            .child(more);
-        let target = cx.entity().downgrade();
-        let view_menu = menu(
-            "view-menu",
-            button(
-                "view-trigger",
-                self.view.label(),
-                ButtonVariant::Secondary,
-                cx,
-            )
-            .border_0()
-            .child(icon(IconName::ChevronDown).size(rems(0.75))),
-            [
-                View::Day,
-                View::Week,
-                View::Month,
-                View::Agenda,
-                View::Tasks,
-            ]
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                MenuItem::new(v.label())
-                    .checked(*v == self.view)
-                    .shortcut((i + 1).to_string())
-            })
-            .collect(),
-            move |index, window, cx| {
-                let _ = target.update(cx, |app, cx| {
-                    app.change_view(
-                        [
-                            View::Day,
-                            View::Week,
-                            View::Month,
-                            View::Agenda,
-                            View::Tasks,
-                        ][index],
-                        window,
-                        cx,
-                    )
-                });
-            },
-        );
-        let heading = div()
-            .h(rems(4.))
-            .flex_shrink_0()
-            .px(rems(1.35))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(rems(0.5))
-            .child(
-                div()
-                    .flex()
-                    .items_baseline()
-                    .gap(rems(0.5))
-                    .child(
-                        div()
-                            .text_size(rems(1.4))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(t.bright)
-                            .child(self.date.format("%B").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(rems(1.4))
-                            .text_color(t.accent)
-                            .child(self.date.year().to_string()),
-                    ),
-            )
-            .child(if compact {
-                view_menu.into_any_element()
-            } else {
-                div()
-                    .flex()
-                    .gap(rems(0.25))
-                    .children(
-                        [
-                            View::Day,
-                            View::Week,
-                            View::Month,
-                            View::Agenda,
-                            View::Tasks,
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, v)| {
-                            button(("view", i), v.label(), ButtonVariant::Secondary, cx)
-                                .border_0()
-                                .px(rems(0.75))
-                                .bg(if v == self.view {
-                                    t.selection
-                                } else {
-                                    t.foreground.opacity(0.)
-                                })
-                                .on_click(cx.listener(move |app, _, window, cx| {
-                                    app.change_view(v, window, cx)
-                                }))
-                        }),
-                    )
-                    .into_any_element()
-            });
+        let layout = self.layout(window);
+        // An empty search folds back into its header button once it loses focus.
+        if self.search_open
+            && self.search.read(cx).value().is_empty()
+            && !self.search.read(cx).focus_handle(cx).is_focused(window)
+        {
+            self.search_open = false;
+        }
         let cursor_event = self.event_at_cursor(cx);
         let content = if self.settings {
             self.settings_view(window, cx)
@@ -878,24 +726,10 @@ impl Render for Ocal {
             .flex_1()
             .min_h_0()
             .flex()
-            .children((!narrow).then(|| self.sidebar(window, cx)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(heading)
-                    .children(compact.then(|| {
-                        div().px(rems(1.35)).pb(rems(0.6)).child(
-                            input("compact-search", &self.search, window, cx)
-                                .w_full()
-                                .border_0()
-                                .bg(t.surface),
-                        )
-                    }))
-                    .child(content),
-            );
+            .children((layout.sidebar && !self.sidebar_hidden).then(|| self.sidebar(cx)))
+            .child(div().flex_1().min_w_0().flex().flex_col().child(content));
+        let header = self.header(layout, window, cx);
+        let status = self.status_bar(layout, cursor_event.as_ref(), cx);
         let mut root = focus_scope("ocal")
             .track_focus(&self.focus)
             .key_context("Ocal OmarchyFocusScope")
@@ -910,9 +744,7 @@ impl Render for Ocal {
             .on_action(
                 cx.listener(|app, _: &NewEvent, window, cx| app.new_event(false, window, cx)),
             )
-            .on_action(cx.listener(|app, _: &Today, _, cx| {
-                app.choose_date(Utc::now().with_timezone(&app.tz()).date_naive(), cx)
-            }))
+            .on_action(cx.listener(|app, _: &Today, _, cx| app.go_today(cx)))
             .on_action(cx.listener(|app, _: &Previous, _, cx| app.navigate(-1, cx)))
             .on_action(cx.listener(|app, _: &Next, _, cx| app.navigate(1, cx)))
             .on_action(
@@ -941,11 +773,7 @@ impl Render for Ocal {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|app, _: &Search, window, cx| {
-                if app.editor.is_none() {
-                    app.search.update(cx, |s, cx| s.focus(window, cx));
-                }
-            }))
+            .on_action(cx.listener(|app, _: &Search, window, cx| app.open_search(window, cx)))
             .on_action(cx.listener(|app, _: &Sync, _, _cx| app.dispatch(Command::Sync(app.date))))
             .on_action(cx.listener(|app, _: &ZoomIn, _, cx| {
                 app.zoom = (app.zoom + 0.1).min(1.8);
@@ -962,12 +790,9 @@ impl Render for Ocal {
                 app.reveal_cursor = true;
                 cx.notify();
             }))
-            .on_action(cx.listener(|app, _: &ToggleSidebar, _, cx| {
-                if app.editor.is_none() {
-                    app.sidebar_open = !app.sidebar_open;
-                    cx.notify();
-                }
-            }))
+            .on_action(
+                cx.listener(|app, _: &ToggleSidebar, window, cx| app.toggle_sidebar(window, cx)),
+            )
             .on_action(cx.listener(|app, _: &ShowActions, window, cx| {
                 if app.editor.is_none() {
                     if app.selected.is_none()
@@ -1041,55 +866,19 @@ impl Render for Ocal {
                     cx.notify();
                 }),
             )
-            .child(toolbar)
+            .child(header)
             .child(body)
-            .child(
-                div()
-                    .min_h(rems(1.5))
-                    .flex_shrink_0()
-                    .px(rems(1.))
-                    .py(rems(0.3))
-                    .border_t_1()
-                    .border_color(t.divider())
-                    .bg(t.inset)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(rems(0.5))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_size(rems(0.65))
-                            .text_color(if self.error { t.danger } else { t.secondary })
-                            .child(self.status.clone()),
-                    )
-                    .children((!compact).then(|| {
-                        div()
-                            .text_color(t.secondary)
-                            .text_size(rems(0.65))
-                            .child(format!(
-                                "{}   ·   Shift arrows select   ·   Enter {}",
-                                self.selection.label(),
-                                if cursor_event.is_some() {
-                                    "open"
-                                } else {
-                                    "add"
-                                }
-                            ))
-                    })),
-            );
-        if narrow && self.sidebar_open {
+            .child(status);
+        if !layout.sidebar && self.sidebar_open {
             root = root.child(
                 div()
                     .absolute()
                     .left_0()
-                    .top(rems(3.2))
-                    .bottom(rems(1.5))
+                    .top(rems(HEADER))
+                    .bottom(rems(STATUS))
                     .occlude()
                     .shadow_lg()
-                    .child(self.sidebar(window, cx)),
+                    .child(self.sidebar(cx)),
             );
         }
         if self.selected.is_some() {

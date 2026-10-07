@@ -1,215 +1,208 @@
 //! Mini month, calendar list and upcoming events.
 use super::*;
+use crate::appearance::{nav_row, section_label, swatch};
 
 impl Ocal {
-    pub(super) fn mini_month(
-        &self,
-        date: NaiveDate,
-        compact: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn mini_month(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.omarchy().clone();
-        let cell = if compact { 1.6 } else { 1.85 };
-        let mut grid = div().flex().flex_col().gap(rems(0.12));
-        let today = Utc::now().with_timezone(&self.tz()).date_naive();
-        for (week, days) in month_days(date).chunks(7).enumerate() {
-            grid = grid.child(div().flex().children(days.iter().enumerate().map(|(i, d)| {
-                let d = *d;
-                let selected = d == self.date;
-                let today = d == today;
-                let mut b = button(
-                    format!("mini-{}-{week}-{i}", date.format("%Y%m")),
-                    d.day().to_string(),
-                    ButtonVariant::Secondary,
-                    cx,
-                )
-                .accessibility_label(d.format("%A %d %B %Y").to_string())
-                .w(rems(cell))
-                .h(rems(cell))
-                .p(rems(0.))
-                .border_0()
-                .text_size(rems(0.7))
-                .text_color(if today {
-                    t.accent
-                } else if d.month() == date.month() {
-                    t.foreground
-                } else {
-                    t.secondary.opacity(0.5)
-                })
-                .bg(if selected {
-                    t.selection
-                } else {
-                    t.foreground.opacity(0.)
-                });
-                if today {
-                    b = b.font_weight(FontWeight::SEMIBOLD);
-                }
-                b.on_click(cx.listener(move |app, _, _, cx| app.choose_date(d, cx)))
-            })));
+        let cell = rems(1.75);
+        let days = month_days(self.date);
+        let today = self.today();
+        let tz = self.tz();
+        // One expansion for the whole grid marks the days that have events.
+        let mut busy = HashSet::new();
+        for e in self.events(days[0], days[41] + Duration::days(1), cx) {
+            let (mut d, end) = e.dates_in(tz);
+            while d < end && d <= days[41] {
+                busy.insert(d);
+                d += Duration::days(1);
+            }
         }
-        let _ = window;
+        let week = (self.view == View::Week).then(|| week_start(self.date));
+        let mut grid = div().flex().flex_col();
+        for (row, dates) in days.chunks(7).enumerate() {
+            let in_view = week == Some(dates[0]);
+            grid = grid.child(
+                div()
+                    .flex()
+                    .when(in_view, |r| r.bg(t.hover_fill()))
+                    .children(dates.iter().enumerate().map(|(i, d)| {
+                        let d = *d;
+                        let selected = d == self.date;
+                        let is_today = d == today;
+                        let color = if is_today {
+                            t.on_accent
+                        } else if d.month() != self.date.month() {
+                            t.secondary.opacity(0.55)
+                        } else {
+                            t.foreground
+                        };
+                        button(("mini", row * 7 + i), "", ButtonVariant::Secondary, cx)
+                            .accessibility_label(d.format("%A %-d %B %Y").to_string())
+                            .relative()
+                            .size(cell)
+                            .p(rems(0.))
+                            .border_0()
+                            .text_size(rems(0.7))
+                            .text_color(color)
+                            .bg(if is_today {
+                                t.accent
+                            } else if selected {
+                                t.selection
+                            } else {
+                                t.foreground.opacity(0.)
+                            })
+                            .hover({
+                                let fill = t.hover_fill();
+                                move |s| if is_today { s } else { s.bg(fill) }
+                            })
+                            .when(is_today || selected, |b| {
+                                b.font_weight(FontWeight::SEMIBOLD)
+                            })
+                            .child(d.day().to_string())
+                            .children((busy.contains(&d) && !is_today).then(|| {
+                                div()
+                                    .absolute()
+                                    .bottom(rems(0.2))
+                                    .left(relative(0.5))
+                                    .ml(px(-1.5))
+                                    .size(px(3.))
+                                    .rounded_full()
+                                    .bg(if selected { t.accent } else { t.secondary })
+                            }))
+                            .on_click(cx.listener(move |app, _, _, cx| app.choose_date(d, cx)))
+                    })),
+            );
+        }
         div()
+            .px(rems(0.75))
+            .pt(rems(0.8))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .pb(rems(0.6))
+                    .pl(rems(0.25))
+                    .pb(rems(0.4))
                     .child(
                         div()
-                            .text_size(rems(0.86))
+                            .flex_1()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(date.format("%B %Y").to_string()),
+                            .text_color(t.bright)
+                            .child(self.date.format("%B %Y").to_string()),
                     )
-                    .when(!compact, |row| {
-                        row.child(
-                            tool_button(
-                                "mini-prev",
-                                IconName::ChevronLeft,
-                                "Previous month",
-                                "",
-                                cx,
-                            )
+                    .child(
+                        tool_button("mini-prev", IconName::ChevronLeft, "Previous month", "", cx)
                             .on_click(cx.listener(|app, _, _, cx| {
                                 app.choose_date(move_month(app.date, -1), cx)
                             })),
-                        )
-                        .child(
-                            tool_button("mini-next", IconName::ChevronRight, "Next month", "", cx)
-                                .on_click(cx.listener(|app, _, _, cx| {
-                                    app.choose_date(move_month(app.date, 1), cx)
-                                })),
-                        )
-                    }),
+                    )
+                    .child(
+                        tool_button("mini-next", IconName::ChevronRight, "Next month", "", cx)
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                app.choose_date(move_month(app.date, 1), cx)
+                            })),
+                    ),
             )
-            .child(div().flex().pb(rems(0.3)).children(
-                ["S", "M", "T", "W", "T", "F", "S"].into_iter().map(|s| {
-                    div()
-                        .w(rems(cell))
-                        .text_center()
-                        .text_size(rems(0.63))
-                        .text_color(t.secondary)
-                        .child(s)
-                }),
-            ))
+            .child(
+                div()
+                    .flex()
+                    .children(["S", "M", "T", "W", "T", "F", "S"].into_iter().map(|s| {
+                        div()
+                            .w(cell)
+                            .pb(rems(0.2))
+                            .text_center()
+                            .text_size(rems(0.6))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.secondary)
+                            .child(s)
+                    })),
+            )
             .child(grid)
             .into_any_element()
     }
-    pub(super) fn calendar_sets(&self, cx: &mut Context<Self>) -> AnyElement {
-        let target = cx.entity().downgrade();
-        let sets = self.snapshot.sets.clone();
-        let active = self.active_set.clone();
-        let mut items = vec![MenuItem::new("All calendars").checked(active.is_none())];
-        items.extend(
-            sets.iter()
-                .map(|s| MenuItem::new(s.name.clone()).checked(active.as_ref() == Some(&s.id))),
-        );
-        menu(
-            "calendar-sets",
-            button("calendar-set-trigger", "", ButtonVariant::Secondary, cx)
-                .border_0()
-                .child(
-                    self.active_set
-                        .as_ref()
-                        .and_then(|id| self.snapshot.sets.iter().find(|s| &s.id == id))
-                        .map(|s| s.name.clone())
-                        .unwrap_or_else(|| "All calendars".into()),
-                )
-                .child(icon(IconName::ChevronDown).size(rems(0.8))),
-            items,
-            move |index, window, cx| {
-                let _ = target.update(cx, |app, cx| {
-                    app.active_set = if index == 0 {
-                        None
-                    } else {
-                        sets.get(index - 1).map(|s| s.id.clone())
-                    };
-                    app.selected = None;
-                    window.focus(&app.focus, cx);
-                    cx.notify();
-                });
-            },
-        )
-        .into_any_element()
-    }
-    pub(super) fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let t = cx.omarchy().clone();
-        let mut side = div()
-            .w(rems(16.5))
-            .h_full()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .bg(t.inset)
-            .border_r_1()
-            .border_color(t.divider())
-            .child(
-                div()
-                    .p(rems(1.1))
-                    .child(self.mini_month(self.date, false, window, cx)),
+    /// Calendar sets as rows; selecting one filters every view.
+    fn calendar_sets(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.snapshot.sets.is_empty() {
+            return None;
+        }
+        let rows = std::iter::once((None, "All calendars".to_string()))
+            .chain(
+                self.snapshot
+                    .sets
+                    .iter()
+                    .map(|s| (Some(s.id.clone()), s.name.clone())),
             )
-            .child(
-                div()
-                    .px(rems(1.))
-                    .pb(rems(0.7))
-                    .child(self.calendar_sets(cx)),
-            );
-        let mut calendar_list = div()
-            .id("sidebar-calendars")
-            .min_h_0()
-            .max_h(rems(18.))
-            .overflow_y_scroll();
+            .enumerate()
+            .map(|(i, (id, name))| {
+                nav_row(("calendar-set", i), self.active_set == id, cx)
+                    .debug_selector(move || format!("calendar-set-{i}"))
+                    .child(icon(IconName::Layers).size(rems(0.8)))
+                    .child(div().flex_1().min_w_0().text_ellipsis().child(name))
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.active_set = id.clone();
+                        app.selected = None;
+                        window.focus(&app.focus, cx);
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .child(section_label("SETS", cx))
+                .children(rows)
+                .into_any_element(),
+        )
+    }
+    fn calendar_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.omarchy().clone();
+        let mut list = div().child(section_label("CALENDARS", cx));
         for (group_index, (account, indices)) in
             calendar_groups(&self.snapshot).into_iter().enumerate()
         {
-            calendar_list = calendar_list.child(
+            if indices.is_empty() {
+                continue;
+            }
+            list = list.child(
                 div()
                     .debug_selector(move || format!("calendar-group-{group_index}"))
-                    .px(rems(1.15))
-                    .pt(rems(0.65))
-                    .pb(rems(0.3))
-                    .text_size(rems(0.63))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .px(rems(0.75))
+                    .pt(rems(0.35))
+                    .pb(rems(0.15))
+                    .text_size(rems(0.66))
                     .text_color(t.secondary)
                     .text_ellipsis()
-                    .child(account.unwrap_or_else(|| "Local calendars".into())),
+                    .whitespace_nowrap()
+                    .child(account.unwrap_or_else(|| "On this computer".into())),
             );
             for i in indices {
                 let c = self.snapshot.calendars[i].clone();
                 let visible = self.visible(&c.id);
                 let color = self.calendar_color(&c.id, cx);
-                calendar_list = calendar_list.child(
-                    button(("calendar-row", i), "", ButtonVariant::Secondary, cx)
+                list = list.child(
+                    nav_row(("calendar-row", i), false, cx)
                         .debug_selector(move || format!("calendar-row-{i}"))
                         .accessibility_label(format!(
                             "{} calendar, {}",
                             c.display_name(),
                             if visible { "visible" } else { "hidden" }
                         ))
-                        .w_full()
-                        .border_0()
-                        .px(rems(1.15))
-                        .py(rems(0.4))
-                        .gap(rems(0.65))
-                        .justify_start()
-                        .child(
-                            icon(if visible {
-                                IconName::SquareCheck
-                            } else {
-                                IconName::Square
-                            })
-                            .size(rems(0.9))
-                            .text_color(color),
-                        )
+                        .h(rems(1.7))
+                        .child(swatch(color, visible))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .text_ellipsis()
-                                .text_size(rems(0.76))
+                                .whitespace_nowrap()
+                                .text_color(if visible { t.foreground } else { t.secondary })
                                 .child(c.name.clone()),
                         )
+                        .children((!c.writable).then(|| {
+                            div()
+                                .text_size(rems(0.6))
+                                .text_color(t.secondary)
+                                .child("read-only")
+                        }))
                         .on_click(cx.listener(move |app, _, window, cx| {
                             window.focus(&app.focus, cx);
                             let mut c = c.clone();
@@ -226,93 +219,79 @@ impl Ocal {
                 );
             }
         }
-        side = side.child(calendar_list).child(
-            action_button(
-                "sidebar-accounts",
-                IconName::Plus,
-                "Add Google account",
-                ButtonVariant::Secondary,
-                cx,
-            )
-            .mx(rems(0.8))
-            .mt(rems(0.4))
-            .border_0()
-            .debug_selector(|| "sidebar-accounts".into())
-            .on_click(cx.listener(|app, _, _, cx| {
-                app.settings = true;
-                app.help = false;
-                app.selected = None;
-                app.sidebar_open = false;
-                cx.notify();
-            })),
-        );
-        let upcoming = self.events(self.date, self.date + Duration::days(5), cx);
-        let mut agenda = div()
-            .id("sidebar-agenda")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(rems(1.))
-            .pt(rems(1.))
-            .child(
-                div()
-                    .pb(rems(0.65))
-                    .text_color(t.secondary)
-                    .text_size(rems(0.62))
-                    .child("UP NEXT"),
-            );
+        list.child(
+            nav_row("sidebar-accounts", false, cx)
+                .debug_selector(|| "sidebar-accounts".into())
+                .h(rems(1.7))
+                .text_color(t.secondary)
+                .child(icon(IconName::Plus).size(rems(0.8)))
+                .child("Add Google account")
+                .on_click(cx.listener(|app, _, window, cx| app.show_settings(window, cx))),
+        )
+        .into_any_element()
+    }
+    /// The next few events from now, labelled relative to today.
+    fn up_next(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.omarchy().clone();
+        let today = self.today();
+        let now = Utc::now();
+        let tz = self.tz();
+        let upcoming: Vec<_> = self
+            .events(today, today + Duration::days(7), cx)
+            .into_iter()
+            .filter(|e| !e.task && e.end > now)
+            .take(8)
+            .collect();
+        let mut list = div().pb(rems(0.6)).child(section_label("UP NEXT", cx));
         if upcoming.is_empty() {
-            agenda = agenda.child(
+            list = list.child(
                 div()
+                    .px(rems(0.75))
+                    .text_size(rems(0.73))
                     .text_color(t.secondary)
-                    .text_size(rems(0.74))
-                    .child("A little breathing room."),
+                    .child("Nothing else this week."),
             );
         }
-        let mut last = None;
-        for (i, e) in upcoming.iter().take(15).enumerate() {
-            let day = e.dates_in(self.tz()).0;
-            if last != Some(day) {
-                agenda = agenda.child(
-                    div()
-                        .pt(rems(0.6))
-                        .pb(rems(0.35))
-                        .text_size(rems(0.7))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(day.format("%a, %-d %b").to_string()),
-                );
-                last = Some(day);
-            }
-            let e = e.clone();
+        for (i, e) in upcoming.into_iter().enumerate() {
             let color = self.calendar_color(&e.calendar, cx);
-            agenda =
-                agenda.child(
-                    button(("upcoming", i), "", ButtonVariant::Secondary, cx)
-                        .border_0()
-                        .w_full()
-                        .justify_start()
-                        .px(rems(0.3))
-                        .py(rems(0.4))
+            let day = e.dates_in(tz).0.max(today);
+            let when = format!("{} · {}", relative_day(day, today), e.time_label(tz));
+            let now_on = e.all_day.is_none() && e.start <= now;
+            let selected = self
+                .selected
+                .as_ref()
+                .is_some_and(|s| s.id == e.id && s.start == e.start);
+            list =
+                list.child(
+                    nav_row(("upcoming", i), selected, cx)
+                        .h(rems(2.5))
                         .gap(rems(0.55))
-                        .child(div().w(px(2.)).h(rems(1.8)).bg(color))
+                        .child(div().w(px(3.)).h(rems(1.7)).flex_shrink_0().bg(color))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .gap(rems(0.15))
+                                .gap(rems(0.1))
                                 .child(
                                     div()
-                                        .text_size(rems(0.73))
                                         .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_color(t.bright)
                                         .child(e.title.clone()),
                                 )
                                 .child(
                                     div()
-                                        .text_size(rems(0.63))
-                                        .text_color(t.secondary)
-                                        .child(e.time_label(self.tz())),
+                                        .text_size(rems(0.66))
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_color(if now_on { t.accent } else { t.secondary })
+                                        .child(if now_on {
+                                            format!("Now · {}", e.time_label(tz))
+                                        } else {
+                                            when
+                                        }),
                                 ),
                         )
                         .on_click(cx.listener(move |app, _, window, cx| {
@@ -320,50 +299,83 @@ impl Ocal {
                         })),
                 );
         }
-        side = side.child(agenda).child(
-            div()
-                .border_t_1()
-                .border_color(t.divider())
-                .p(rems(0.65))
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    action_button(
-                        "settings",
-                        IconName::Settings,
-                        "Settings",
-                        ButtonVariant::Secondary,
-                        cx,
+        list.into_any_element()
+    }
+    pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.omarchy().clone();
+        div()
+            .debug_selector(|| "sidebar".into())
+            .w(rems(SIDEBAR))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .bg(t.inset)
+            .border_r_1()
+            .border_color(t.divider())
+            .child(self.mini_month(cx))
+            .child(
+                div()
+                    .id("sidebar-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(self.calendar_sets(cx))
+                    .child(self.calendar_list(cx))
+                    .child(self.up_next(cx)),
+            )
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(t.divider())
+                    .px(rems(0.5))
+                    .h(rems(2.6))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        action_button(
+                            "settings",
+                            IconName::Settings,
+                            "Settings",
+                            ButtonVariant::Secondary,
+                            cx,
+                        )
+                        .border_0()
+                        .bg(t.foreground.opacity(0.))
+                        .on_click(cx.listener(|app, _, window, cx| app.show_settings(window, cx))),
                     )
-                    .border_0()
-                    .on_click(cx.listener(|app, _, window, cx| {
-                        if app.editor.is_none() {
-                            app.settings = true;
-                            app.help = false;
-                            app.selected = None;
-                            window.focus(&app.focus, cx);
+                    .child(
+                        tool_button(
+                            "help",
+                            IconName::CircleQuestionMark,
+                            "Keyboard shortcuts",
+                            "?",
+                            cx,
+                        )
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.help = true;
+                            app.settings = false;
                             cx.notify();
-                        }
-                    })),
-                )
-                .child(
-                    tool_button(
-                        "help",
-                        IconName::CircleQuestionMark,
-                        "Keyboard shortcuts",
-                        "?",
-                        cx,
-                    )
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        app.help = true;
-                        cx.notify();
-                    })),
-                ),
-        );
-        side.into_any_element()
+                        })),
+                    ),
+            )
+            .into_any_element()
     }
 }
+
+/// "Today", "Tomorrow" or a short weekday and date.
+pub(super) fn relative_day(day: NaiveDate, today: NaiveDate) -> String {
+    match (day - today).num_days() {
+        0 => "Today".into(),
+        1 => "Tomorrow".into(),
+        -1 => "Yesterday".into(),
+        2..=6 => day.format("%A").to_string(),
+        _ => day.format("%a %-d %b").to_string(),
+    }
+}
+
 /// Include calendar-owned account IDs as well as saved accounts, so cached calendars
 /// remain visible even if an older build did not persist their account record.
 pub(super) fn calendar_groups(snapshot: &Snapshot) -> Vec<(Option<String>, Vec<usize>)> {
