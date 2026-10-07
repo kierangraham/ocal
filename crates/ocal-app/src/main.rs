@@ -41,6 +41,16 @@ fn main() -> Result<()> {
                 .join(".local/share"),
         )
         .join("ocal/calendar.sqlite3");
+    // Debug builds can open at an exact size, for screenshots of hidden windows.
+    let mut initial = size(px(1440.), px(940.));
+    #[cfg(debug_assertions)]
+    if let Some((w, h)) = std::env::var("OCAL_DEBUG_SIZE")
+        .ok()
+        .and_then(|s| s.split_once('x').map(|(w, h)| (w.parse(), h.parse())))
+        .and_then(|(w, h)| Some((w.ok()?, h.ok()?)))
+    {
+        initial = size(px(w), px(h));
+    }
     gpui_kit::application()
         .with_assets(assets::Assets)
         .run(move |cx| {
@@ -51,7 +61,7 @@ fn main() -> Result<()> {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                         point(px(80.), px(80.)),
-                        size(px(1440.), px(940.)),
+                        initial,
                     ))),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Ocal".into()),

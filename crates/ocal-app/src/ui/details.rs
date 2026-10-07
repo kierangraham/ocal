@@ -408,7 +408,11 @@ impl Ocal {
             .absolute()
             .right_0()
             .top(rems(HEADER))
-            .w(rems(24.))
+            .w(if self.compact {
+                window.viewport_size().width
+            } else {
+                rems(24.).to_pixels(window.rem_size())
+            })
             .max_w(window.viewport_size().width)
             .max_h(
                 window.viewport_size().height - rems(HEADER + STATUS).to_pixels(window.rem_size()),

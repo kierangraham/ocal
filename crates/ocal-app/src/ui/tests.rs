@@ -744,7 +744,48 @@ fn half_width_tiles_keep_the_week_and_view_buttons(cx: &mut TestAppContext) {
     assert!(right.right() <= px(851.));
     cx.simulate_resize(size(px(600.), px(800.)));
     draw(cx);
-    assert!(cx.debug_bounds("grid-day-1").is_none());
+    assert!(cx.debug_bounds("grid-day-2").is_some());
+    assert!(cx.debug_bounds("grid-day-3").is_none());
+}
+
+#[gpui_kit::test]
+fn narrow_windows_show_three_days_centred_on_the_selected_date(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    cx.simulate_resize(size(px(480.), px(800.)));
+    draw(cx);
+    let date = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
+    let columns = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            let mut days: Vec<_> = app.grid_bounds.keys().copied().collect();
+            days.sort();
+            days
+        })
+    };
+    assert_eq!(
+        columns(cx),
+        vec![date - Duration::days(1), date, date + Duration::days(1)]
+    );
+    assert_eq!(
+        view.read_with(cx, |app, _| app.period_title(true)),
+        ("4 – 6 Oct".to_string(), "2026".to_string())
+    );
+    // Arrows keep the selection in the middle; the period buttons page by three.
+    cx.simulate_keystrokes("right");
+    draw(cx);
+    assert_eq!(columns(cx)[1], date + Duration::days(1));
+    cx.simulate_keystrokes("]");
+    draw(cx);
+    assert_eq!(columns(cx)[1], date + Duration::days(4));
+    view.update(cx, |app, _| {
+        app.date = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+    });
+    assert_eq!(
+        view.read_with(cx, |app, _| app.period_title(true).0),
+        "30 Sep – 2 Oct"
+    );
+    cx.simulate_keystrokes("1");
+    draw(cx);
+    assert_eq!(columns(cx).len(), 1);
 }
 
 #[gpui_kit::test]

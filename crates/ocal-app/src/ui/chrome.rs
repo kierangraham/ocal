@@ -22,10 +22,18 @@ impl Ocal {
                     .to_string(),
                 year(self.date),
             ),
-            View::Week if !compact => {
-                let first = week_start(self.date);
-                let last = first + Duration::days(6);
-                if first.month() == last.month() {
+            View::Week => {
+                let days = self.visible_days(compact);
+                let (first, last) = (days[0], days[days.len() - 1]);
+                if compact {
+                    // "6 – 8 Oct", or "30 Sep – 2 Oct" across months.
+                    let start = if first.month() == last.month() {
+                        first.format("%-d").to_string()
+                    } else {
+                        first.format("%-d %b").to_string()
+                    };
+                    (format!("{start} – {}", last.format("%-d %b")), year(last))
+                } else if first.month() == last.month() {
                     (first.format("%B").to_string(), year(first))
                 } else if first.year() == last.year() {
                     (
@@ -53,7 +61,11 @@ impl Ocal {
         let t = cx.omarchy().clone();
         let searching = !self.search.read(cx).value().is_empty() || self.search_open;
         let inline_search = layout.wide || searching;
-        let (title, year) = self.period_title(layout.compact);
+        let (title, mut year) = self.period_title(layout.compact);
+        // Narrow windows only name the year when it isn't this one.
+        if layout.compact && year == self.today().year().to_string() {
+            year.clear();
+        }
         let brand = div()
             .w(rems(SIDEBAR - 0.6))
             .flex_shrink_0()
@@ -100,7 +112,13 @@ impl Ocal {
                     .text_ellipsis()
                     .child(title),
             )
-            .child(div().text_size(rems(1.)).text_color(t.accent).child(year));
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(rems(1.))
+                    .text_color(t.accent)
+                    .child(year),
+            );
         let mut search = Some(
             input("search", &self.search, window, cx)
                 .debug_selector(|| "search".into())
@@ -145,15 +163,20 @@ impl Ocal {
                 )
                 .on_click(cx.listener(|app, _, _, cx| app.navigate(-1, cx))),
             )
-            .child(
+            .child(if layout.compact {
+                tool_button("today", IconName::CalendarCheck, "Today", "T", cx)
+                    .on_click(cx.listener(|app, _, _, cx| app.go_today(cx)))
+                    .into_any_element()
+            } else {
                 button("today", "Today", ButtonVariant::Secondary, cx)
                     .h(rems(1.7))
                     .px(rems(0.6))
                     .border_1()
                     .border_color(t.divider())
                     .bg(t.foreground.opacity(0.))
-                    .on_click(cx.listener(|app, _, _, cx| app.go_today(cx))),
-            )
+                    .on_click(cx.listener(|app, _, _, cx| app.go_today(cx)))
+                    .into_any_element()
+            })
             .child(
                 tool_button("next", IconName::ChevronRight, "Next period", "]", cx)
                     .on_click(cx.listener(|app, _, _, cx| app.navigate(1, cx))),
@@ -206,7 +229,7 @@ impl Ocal {
                 "view-menu",
                 button(
                     "view-trigger",
-                    self.view.label(),
+                    self.view.compact_label(),
                     ButtonVariant::Secondary,
                     cx,
                 )
@@ -218,7 +241,7 @@ impl Ocal {
                     .iter()
                     .enumerate()
                     .map(|(i, v)| {
-                        MenuItem::new(v.label())
+                        MenuItem::new(v.compact_label())
                             .checked(*v == self.view)
                             .shortcut((i + 1).to_string())
                     })

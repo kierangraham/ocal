@@ -1018,7 +1018,11 @@ impl Ocal {
             .right_0()
             .top(rems(HEADER))
             .bottom(rems(STATUS))
-            .w(rems(26.))
+            .w(if self.compact {
+                window.viewport_size().width
+            } else {
+                rems(26.).to_pixels(window.rem_size())
+            })
             .max_w(window.viewport_size().width)
             .flex()
             .flex_col()

@@ -22,14 +22,7 @@ impl Ocal {
         let compact = self.layout(window).compact;
         // Dates from a previous period would otherwise still claim pointer hits.
         self.grid_bounds.clear();
-        let days = if self.view == View::Day || compact {
-            vec![self.date]
-        } else {
-            let first = week_start(self.date);
-            (0..7)
-                .map(|i| first + Duration::days(i))
-                .collect::<Vec<_>>()
-        };
+        let days = self.visible_days(compact);
         let events = self.events(days[0], *days.last().unwrap() + Duration::days(1), cx);
         let today = self.today();
         let now = Utc::now();

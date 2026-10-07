@@ -118,6 +118,14 @@ impl View {
             _ => return None,
         })
     }
+    /// Narrow windows show Week as three days centred on the selected date.
+    fn compact_label(self) -> &'static str {
+        if self == Self::Week {
+            "3 days"
+        } else {
+            self.label()
+        }
+    }
     fn label(self) -> &'static str {
         match self {
             Self::Day => "Day",
@@ -193,6 +201,8 @@ pub struct Ocal {
     sidebar_open: bool,
     /// The user hid the docked sidebar in a wide window.
     sidebar_hidden: bool,
+    /// The last frame was narrow enough for the three-day week.
+    compact: bool,
     search_open: bool,
     zones: Vec<String>,
     zone_choice: Entity<ChoiceState>,
@@ -296,6 +306,7 @@ impl Ocal {
             help: false,
             sidebar_open: false,
             sidebar_hidden: false,
+            compact: false,
             search_open: false,
             zones,
             zone_choice,
@@ -627,9 +638,21 @@ impl Ocal {
         }
         cx.notify();
     }
+    /// Dates shown by the time grid: one day, three centred days, or the week.
+    fn visible_days(&self, compact: bool) -> Vec<NaiveDate> {
+        match self.view {
+            View::Day => vec![self.date],
+            _ if compact => (-1..=1).map(|i| self.date + Duration::days(i)).collect(),
+            _ => {
+                let first = week_start(self.date);
+                (0..7).map(|i| first + Duration::days(i)).collect()
+            }
+        }
+    }
     fn navigate(&mut self, n: i32, cx: &mut Context<Self>) {
         let date = match self.view {
             View::Day => self.date + Duration::days(n as i64),
+            View::Week if self.compact => self.date + Duration::days(3 * n as i64),
             View::Week | View::Agenda | View::Tasks => self.date + Duration::days(7 * n as i64),
             View::Month => move_month(self.date, n),
         };
@@ -815,6 +838,7 @@ impl Render for Ocal {
         window.set_rem_size(px(16. * self.zoom));
         let t = cx.omarchy().clone();
         let layout = self.layout(window);
+        self.compact = layout.compact;
         if self.pending_new && !self.snapshot.calendars.is_empty() {
             self.pending_new = false;
             self.new_event(false, window, cx);
