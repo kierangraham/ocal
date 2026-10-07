@@ -1,0 +1,25 @@
+[package]
+name = "ocal-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+[[bin]]
+name = "ocal"
+path = "src/main.rs"
+[lints]
+workspace = true
+[dependencies]
+ocal-core.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+url = "2"
+gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets"] }
+gpui-omarchy = "=0.1.3"
+async-channel = "2"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+[dev-dependencies]
+gpui-kit = { version = "=0.6.6", default-features = false, features = ["assets", "test-support"] }

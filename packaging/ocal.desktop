@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Ocal
+GenericName=Calendar
+Comment=Google-first native calendar for Omarchy
+Exec=ocal
+Icon=ocal
+Terminal=false
+Categories=Office;Calendar;
+StartupWMClass=ocal
+Keywords=calendar;events;meet;google;omarchy;
+Actions=Demo;
+
+[Desktop Action Demo]
+Name=Explore Sample Calendar
+Exec=ocal --demo
