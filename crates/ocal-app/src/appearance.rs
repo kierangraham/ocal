@@ -1,4 +1,4 @@
-use gpui_kit::{App, ElementId, prelude::*, rems};
+use gpui_kit::{App, ElementId, FontWeight, div, prelude::*, rems};
 use gpui_omarchy::{ActiveTheme, Button, ButtonVariant, IconName, button, icon, with_tooltip};
 
 pub fn tool_button(
@@ -80,4 +80,43 @@ pub fn reveal_field(
             window.refresh();
         })
         .into_any_element()
+}
+
+/// An opaque calendar-coloured fill over the theme background.
+pub fn tint(t: &gpui_omarchy::Theme, color: gpui_kit::Hsla, amount: f32) -> gpui_kit::Hsla {
+    t.background.blend(color.opacity(amount))
+}
+/// Calendar colours are often pastel; on light themes they fail contrast as text.
+pub fn event_text(t: &gpui_omarchy::Theme, color: gpui_kit::Hsla) -> gpui_kit::Hsla {
+    if t.background.l > 0.5 {
+        t.bright
+    } else {
+        color
+    }
+}
+/// A day number, filled with the accent colour when it is today.
+pub fn day_number(
+    day: u32,
+    today: bool,
+    color: gpui_kit::Hsla,
+    size: gpui_kit::Rems,
+    badge: gpui_kit::Rems,
+    t: &gpui_omarchy::Theme,
+) -> gpui_kit::Div {
+    div()
+        .min_w(badge)
+        .h(badge)
+        .px(rems(0.3))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .text_size(size)
+        .when(today, |d| {
+            d.bg(t.accent)
+                .text_color(t.on_accent)
+                .font_weight(FontWeight::SEMIBOLD)
+        })
+        .when(!today, |d| d.text_color(color))
+        .child(day.to_string())
 }
