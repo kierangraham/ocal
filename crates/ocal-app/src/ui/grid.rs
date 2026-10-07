@@ -19,7 +19,7 @@ impl Ocal {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = cx.omarchy().clone();
-        let compact = window.viewport_size().width < px(COMPACT * self.zoom);
+        let compact = self.layout(window).compact;
         // Dates from a previous period would otherwise still claim pointer hits.
         self.grid_bounds.clear();
         let days = if self.view == View::Day || compact {
@@ -31,8 +31,10 @@ impl Ocal {
                 .collect::<Vec<_>>()
         };
         let events = self.events(days[0], *days.last().unwrap() + Duration::days(1), cx);
-        let today = Utc::now().with_timezone(&self.tz()).date_naive();
+        let today = self.today();
+        let now = Utc::now();
         let target = cx.entity().downgrade();
+        let weekend = |d: NaiveDate| d.weekday().num_days_from_sunday() % 6 == 0;
         let mut header = div()
             .flex()
             .pl(rems(3.4))
@@ -40,76 +42,120 @@ impl Ocal {
             .border_color(t.divider());
         for (i, date) in days.iter().enumerate() {
             let date = *date;
+            let is_today = date == today;
             header = header.child(
                 button(("day-heading", i), "", ButtonVariant::Secondary, cx)
+                    .accessibility_label(date.format("%A %-d %B").to_string())
+                    .relative()
                     .flex_1()
                     .min_w_0()
+                    .h(rems(2.6))
                     .border_0()
-                    .py(rems(0.7))
-                    .flex_col()
-                    .gap(rems(0.25))
-                    .bg(if date == self.date {
-                        t.accent.opacity(0.035)
+                    .gap(rems(0.4))
+                    .bg(if weekend(date) {
+                        t.foreground.opacity(0.02)
                     } else {
                         t.foreground.opacity(0.)
                     })
+                    .hover(|s| s.bg(t.hover_fill()))
                     .child(
                         div()
-                            .text_size(rems(0.65))
-                            .text_color(t.secondary)
+                            .text_size(rems(0.72))
+                            .text_color(if is_today { t.accent } else { t.secondary })
                             .child(date.format("%a").to_string()),
                     )
                     .child(day_number(
                         date.day(),
-                        date == today,
+                        is_today,
                         t.bright,
-                        rems(1.1),
-                        rems(2.),
+                        rems(0.95),
+                        rems(1.6),
                         &t,
                     ))
+                    .children((date == self.date && days.len() > 1).then(|| {
+                        div()
+                            .absolute()
+                            .left(rems(0.5))
+                            .right(rems(0.5))
+                            .bottom_0()
+                            .h(px(2.))
+                            .bg(t.accent)
+                    }))
                     .on_click(cx.listener(move |app, _, _, cx| app.choose_date(date, cx))),
             );
         }
         let mut all_day = div()
             .flex()
-            .min_h(rems(2.))
+            .min_h(rems(1.7))
             .border_b_1()
             .border_color(t.divider())
             .child(
                 div()
                     .w(rems(3.4))
                     .flex_shrink_0()
-                    .p(rems(0.35))
-                    .text_size(rems(0.58))
+                    .pt(rems(0.45))
+                    .pr(rems(0.5))
+                    .text_right()
+                    .text_size(rems(0.55))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.secondary)
-                    .child("all-day"),
+                    .child("ALL DAY"),
             );
         let mut counter = 30000;
-        for date in &days {
+        for (i, date) in days.iter().enumerate() {
+            let date = *date;
+            let items: Vec<_> = events
+                .iter()
+                .filter(|e| e.all_day.is_some() && !e.task && e.on_date(date, self.tz()))
+                .collect();
             let mut day = div()
                 .flex_1()
                 .min_w_0()
                 .px(rems(0.15))
-                .py(rems(0.25))
+                .py(rems(0.2))
                 .flex()
                 .flex_col()
-                .gap(rems(0.12));
-            for e in events
-                .iter()
-                .filter(|e| e.all_day.is_some() && !e.task && e.on_date(*date, self.tz()))
-            {
+                .gap(rems(0.12))
+                .border_l_1()
+                .border_color(t.divider())
+                .when(weekend(date), |d| d.bg(t.foreground.opacity(0.02)));
+            // Keep the row short; the rest are a click away in the day view.
+            for e in items.iter().take(2) {
                 day = day.child(self.event_chip(e, counter, true, cx));
                 counter += 1;
             }
+            if items.len() > 2 {
+                day = day.child(
+                    button(("all-day-more", i), "", ButtonVariant::Secondary, cx)
+                        .h(rems(1.1))
+                        .px(rems(0.3))
+                        .border_0()
+                        .justify_start()
+                        .bg(t.foreground.opacity(0.))
+                        .text_size(rems(0.62))
+                        .text_color(t.secondary)
+                        .child(format!("+{} more", items.len() - 2))
+                        .on_click(cx.listener(move |app, _, window, cx| {
+                            app.choose_date(date, cx);
+                            app.change_view(View::Day, window, cx);
+                        })),
+                );
+            }
             all_day = all_day.child(day);
         }
+        let now_local = now.with_timezone(&self.tz());
+        let now_hours = now_local.hour() as f32 + now_local.minute() as f32 / 60.;
+        let showing_today = days.contains(&today);
         let mut hours = div()
             .w(rems(3.4))
             .flex_shrink_0()
             .h(rems(HOUR * 24.))
+            .relative()
             .flex()
             .flex_col();
         for h in 0..24 {
+            // The current-time pill replaces an hour label it would overlap.
+            let hidden = h == 0 || (showing_today && (h as f32 - now_hours).abs() < 0.3);
             // Centre each label on its hour line, as the line is what times refer to.
             hours = hours.child(
                 div()
@@ -120,7 +166,25 @@ impl Ocal {
                     .text_color(t.secondary)
                     .pr(rems(0.5))
                     .text_right()
-                    .when(h > 0, |d| d.child(format!("{h:02}:00"))),
+                    .when(!hidden, |d| d.child(format!("{h:02}:00"))),
+            );
+        }
+        if showing_today {
+            hours = hours.child(
+                div()
+                    .debug_selector(|| "now-pill".into())
+                    .absolute()
+                    .right(rems(0.25))
+                    .top(rems(now_hours * HOUR - 0.45))
+                    .px(rems(0.2))
+                    .h(rems(0.9))
+                    .flex()
+                    .items_center()
+                    .bg(t.accent)
+                    .text_color(t.on_accent)
+                    .text_size(rems(0.58))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(now_local.format("%H:%M").to_string()),
             );
         }
         // One shared layer of hour and half-hour lines beneath every column.
@@ -155,6 +219,9 @@ impl Ocal {
                 .border_l_1()
                 .border_color(t.divider())
                 .when(date == today, |col| col.bg(t.accent.opacity(0.035)))
+                .when(weekend(date) && date != today, |col| {
+                    col.bg(t.foreground.opacity(0.02))
+                })
                 .on_prepaint(move |bounds, _, cx| {
                     let _ = bounds_target.update(cx, |app, _| {
                         app.grid_bounds.insert(date, bounds);
@@ -232,6 +299,8 @@ impl Ocal {
                 let index = di * 1000 + placement.index;
                 let duration = placement.end - placement.start;
                 let compact_event = duration < 0.75;
+                let past = e.end <= now;
+                let declined = e.attendees.iter().any(|a| a.me && a.response == "declined");
                 let highlighted = self
                     .selected
                     .as_ref()
@@ -261,6 +330,7 @@ impl Ocal {
                     .justify_start()
                     .items_start()
                     .overflow_hidden()
+                    .when((past || declined) && !highlighted, |s| s.opacity(0.55))
                     .child(
                         div()
                             .w_full()
@@ -282,6 +352,7 @@ impl Ocal {
                                     .when(duration >= 1.5, |s| s.whitespace_normal())
                                     .line_clamp(if duration >= 1.5 { 2 } else { 1 })
                                     .text_ellipsis()
+                                    .when(declined, |s| s.line_through())
                                     .child(e.title.clone()),
                             )
                             .children((!compact_event).then(|| {
@@ -356,30 +427,30 @@ impl Ocal {
                 col = col.child(highlighted);
             }
             if date == today {
-                let now = Utc::now().with_timezone(&tz);
-                let minute = now.hour() as f32 * 60. + now.minute() as f32;
+                col = col.child(
+                    div()
+                        .debug_selector(|| "now-line".into())
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(rems(now_hours * HOUR))
+                        .h(px(2.))
+                        .bg(t.accent),
+                );
+            } else if showing_today {
+                // A faint guide carries the current time across the rest of the week.
                 col = col.child(
                     div()
                         .absolute()
                         .left_0()
                         .right_0()
-                        .top(rems(minute / 60. * HOUR))
+                        .top(rems(now_hours * HOUR))
                         .h(px(1.))
-                        .bg(t.accent)
-                        .child(
-                            div()
-                                .absolute()
-                                .left(-px(3.))
-                                .top(-px(2.))
-                                .size(px(5.))
-                                .rounded_full()
-                                .bg(t.accent),
-                        ),
+                        .bg(t.accent.opacity(0.35)),
                 );
             }
             let slot_target = cx.entity().downgrade();
             let open_target = slot_target.clone();
-            let current = Slot::new(date, 9 * 60);
             col = col
                 .on_mouse_down(
                     MouseButton::Left,
@@ -423,7 +494,6 @@ impl Ocal {
                         cx.notify();
                     }),
                 );
-            let _ = current;
             let items = vec![
                 MenuItem::new("New event")
                     .icon(IconName::Plus)
@@ -453,10 +523,7 @@ impl Ocal {
                                 let _ = slot_target.update(cx, |app, cx| match index {
                                     0 => app.new_event(false, window, cx),
                                     1 => app.new_event(true, window, cx),
-                                    _ => app.choose_date(
-                                        Utc::now().with_timezone(&app.tz()).date_naive(),
-                                        cx,
-                                    ),
+                                    _ => app.go_today(cx),
                                 });
                             },
                         )
@@ -472,20 +539,29 @@ impl Ocal {
             );
             grid = grid.child(div().flex_1().min_w_0().child(col));
         }
-        let first = self.initial_grid_scroll;
+        let first = self.initial_grid_scroll || self.scroll_to_now;
         self.initial_grid_scroll = false;
+        self.scroll_to_now = false;
         let initial_scroll = self.grid_scroll.clone();
         let scroll = div()
-            .on_prepaint(move |_, window, _| {
-                if first {
-                    initial_scroll
-                        // Stop just above 07:00 so its centred label isn't clipped.
-                        .set_offset(point(
-                            px(0.),
-                            -rems(HOUR * 7. - 0.6).to_pixels(window.rem_size()),
-                        ));
-                    window.refresh();
+            .on_prepaint(move |bounds, window, _| {
+                if !first {
+                    return;
                 }
+                let hour = rems(HOUR).to_pixels(window.rem_size());
+                // Stop just above 07:00 so its centred label isn't clipped, unless
+                // the current time would be off screen below.
+                let morning = hour * 7. - rems(0.6).to_pixels(window.rem_size());
+                let now = hour * now_hours;
+                let top = if showing_today && now > morning + bounds.size.height - hour {
+                    now - bounds.size.height / 3.
+                } else {
+                    morning
+                };
+                // GPUI clamps the far end to the content during layout.
+                let top = top.max(px(0.));
+                initial_scroll.set_offset(point(px(0.), -top));
+                window.refresh();
             })
             .id("time-scroll")
             .debug_selector(|| "time-scroll".into())
