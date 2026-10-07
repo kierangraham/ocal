@@ -1,5 +1,30 @@
 //! Event details panel.
 use super::*;
+use crate::appearance::section_label;
+
+/// "in 25 min", "Now · 40 min left" or "Ended", relative to `now`.
+pub(super) fn relative_time(e: &Event, now: chrono::DateTime<Utc>) -> Option<String> {
+    if e.all_day.is_some() || e.task {
+        return None;
+    }
+    let span = |d: Duration| {
+        let m = d.num_minutes().max(1);
+        if m < 60 {
+            format!("{m} min")
+        } else if m < 48 * 60 {
+            format!("{} h", (m + 30) / 60)
+        } else {
+            format!("{} days", (m + 720) / 1440)
+        }
+    };
+    Some(if now < e.start {
+        format!("in {}", span(e.start - now))
+    } else if now < e.end {
+        format!("Now · {} left", span(e.end - now))
+    } else {
+        "Ended".into()
+    })
+}
 
 impl Ocal {
     pub(super) fn details(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -7,8 +32,16 @@ impl Ocal {
             return div().into_any_element();
         };
         let t = cx.omarchy().clone();
+        let tz = self.tz();
         let writable = self.writable(e);
         let color = self.calendar_color(&e.calendar, cx);
+        let calendar_name = self
+            .snapshot
+            .calendars
+            .iter()
+            .find(|c| c.id == e.calendar)
+            .map(|c| c.display_name())
+            .unwrap_or_default();
         let target = cx.entity().downgrade();
         let action = e.clone();
         let open_target = target.clone();
@@ -35,78 +68,147 @@ impl Ocal {
                 cx.notify();
             });
         });
-        let mut content = div()
-            .id("details-scroll")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p(rems(1.1))
+        let copy = |id: &'static str, text: String, what: &'static str, cx: &mut Context<Self>| {
+            tool_button(id, IconName::Copy, what, "", cx).on_click(cx.listener(
+                move |app, _, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    app.status = format!("{what} copied");
+                    app.error = false;
+                    cx.notify();
+                },
+            ))
+        };
+        let (day, _) = e.dates_in(tz);
+        let mut when = div()
             .flex()
             .flex_col()
-            .gap(rems(1.))
+            .gap(rems(0.15))
             .child(
                 div()
-                    .text_size(rems(1.25))
+                    .text_color(t.foreground)
+                    .child(day.format("%A %-d %B %Y").to_string()),
+            )
+            .child(div().text_color(t.secondary).child(e.time_label(tz)));
+        if let Some(hint) = relative_time(e, Utc::now()) {
+            when = when.child(
+                div()
+                    .text_size(rems(0.7))
+                    .text_color(if hint.starts_with("Now") {
+                        t.accent
+                    } else {
+                        t.secondary
+                    })
+                    .child(hint),
+            );
+        }
+        let mut content = div()
+            .id("details-scroll")
+            .flex_shrink(1.)
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(rems(1.))
+            .pb(rems(1.))
+            .flex()
+            .flex_col()
+            .gap(rems(0.9))
+            .child(
+                div()
+                    .text_size(rems(1.2))
                     .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.bright)
                     .whitespace_normal()
+                    .when(e.completed, |d| d.line_through())
                     .child(e.title.clone()),
             )
-            .child(detail_line(
-                IconName::Clock,
+            .child(row(IconName::Clock, when.into_any_element(), cx));
+        // Only mention the event's zone when its clock time differs from the display.
+        let offset = |z: &str| {
+            use chrono::Offset;
+            e.start.with_timezone(&zone(z)).offset().fix()
+        };
+        if e.all_day.is_none() && offset(&e.timezone) != offset(&self.display_zone) {
+            content = content.child(detail_line(
+                IconName::Globe,
                 format!(
-                    "{}\n{}",
-                    e.dates_in(self.tz()).0.format("%A, %-d %B %Y"),
-                    e.time_label(self.tz())
+                    "{} in {}",
+                    e.time_label(zone(&e.timezone)),
+                    e.timezone.replace('_', " ")
                 ),
                 cx,
-            ))
-            .child(detail_line(
-                IconName::Calendar,
-                self.snapshot
-                    .calendars
-                    .iter()
-                    .find(|c| c.id == e.calendar)
-                    .map(|c| c.display_name())
-                    .unwrap_or_default(),
+            ));
+        }
+        if e.series_id.is_some() || e.repeat != Repeat::Never {
+            content = content.child(detail_line(
+                IconName::Repeat,
+                if e.remote_id.is_some() {
+                    "Part of a recurring event".into()
+                } else {
+                    format!("Repeats {}", e.repeat.label().to_lowercase())
+                },
                 cx,
-            ))
-            .child(detail_line(IconName::Globe, e.timezone.clone(), cx));
+            ));
+        }
         if !e.location.is_empty() {
-            content = content.child(detail_line(IconName::MapPin, e.location.clone(), cx));
+            content = content.child(row(
+                IconName::MapPin,
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.4))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .child(e.location.clone()),
+                    )
+                    .child(copy("copy-location", e.location.clone(), "Location", cx))
+                    .into_any_element(),
+                cx,
+            ));
         }
         if !e.link.is_empty() {
             let link = e.link.clone();
             content = content.child(
-                action_button(
-                    "join-meeting",
-                    IconName::Video,
-                    "Join meeting",
-                    ButtonVariant::Primary,
-                    cx,
-                )
-                .on_click(cx.listener(move |app, _, _, cx| {
-                    match ocal_core::safe_url(&link) {
-                        Ok(url) => {
-                            if let Err(error) = std::process::Command::new("xdg-open")
-                                .arg(url.as_str())
-                                .spawn()
-                            {
-                                app.status = error.to_string();
-                                app.error = true;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.4))
+                    .child(
+                        action_button(
+                            "join-meeting",
+                            IconName::Video,
+                            "Join meeting",
+                            ButtonVariant::Primary,
+                            cx,
+                        )
+                        .debug_selector(|| "join-meeting".into())
+                        .flex_1()
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            match ocal_core::safe_url(&link) {
+                                Ok(url) => {
+                                    if let Err(error) = std::process::Command::new("xdg-open")
+                                        .arg(url.as_str())
+                                        .spawn()
+                                    {
+                                        app.status = error.to_string();
+                                        app.error = true;
+                                    }
+                                }
+                                Err(error) => {
+                                    app.status = error.to_string();
+                                    app.error = true;
+                                }
                             }
-                        }
-                        Err(error) => {
-                            app.status = error.to_string();
-                            app.error = true;
-                        }
-                    }
-                    cx.notify();
-                })),
+                            cx.notify();
+                        })),
+                    )
+                    .child(copy("copy-link", e.link.clone(), "Meeting link", cx)),
             );
         } else if e.conference_status == "pending" {
             content = content.child(detail_line(
                 IconName::Video,
-                "Google Meet link is being generated. It will appear here automatically.".into(),
+                "Google is generating the Meet link; it appears here automatically.".into(),
                 cx,
             ));
         } else if e.conference_status == "failure" {
@@ -116,118 +218,187 @@ impl Ocal {
                     .child("Google could not generate this Meet link."),
             );
         }
+        if !e.attendees.is_empty() {
+            let mut guests: Vec<_> = e.attendees.iter().collect();
+            guests.sort_by_key(|a| !a.me);
+            let going = guests.iter().filter(|a| a.response == "accepted").count();
+            let mut list = div().flex().flex_col().gap(rems(0.3)).child(
+                section_label("GUESTS", cx)
+                    .px(rems(0.))
+                    .pt(rems(0.))
+                    .child(format!(" · {going} of {} going", guests.len())),
+            );
+            for a in guests {
+                let (glyph, tone) = match a.response.as_str() {
+                    "accepted" => (IconName::CircleCheck, t.success),
+                    "declined" => (IconName::CircleX, t.danger),
+                    "tentative" => (IconName::CircleQuestionMark, t.warning),
+                    _ => (IconName::Clock, t.secondary),
+                };
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(rems(0.5))
+                        .text_size(rems(0.74))
+                        .child(icon(glyph).size(rems(0.85)).text_color(tone))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(a.email.clone()),
+                        )
+                        .children(a.me.then(|| div().text_color(t.secondary).child("you"))),
+                );
+            }
+            content = content.child(list);
+        }
+        if e.remote_id.is_some()
+            && let Some(me) = e.attendees.iter().find(|a| a.me)
+        {
+            let ev = e.clone();
+            content = content.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.6))
+                    .child(div().text_color(t.secondary).child("Going?"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .h(rems(1.8))
+                            .border_1()
+                            .border_color(t.divider())
+                            .children(
+                                [
+                                    ("Yes", "accepted"),
+                                    ("Maybe", "tentative"),
+                                    ("No", "declined"),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, (label, response))| {
+                                    let active = me.response == response;
+                                    let e = ev.clone();
+                                    button(("rsvp", i), label, ButtonVariant::Secondary, cx)
+                                        .debug_selector(move || format!("rsvp-{i}"))
+                                        .relative()
+                                        .flex_1()
+                                        .h_full()
+                                        .border_0()
+                                        .disabled(self.busy)
+                                        .bg(if active {
+                                            t.selection
+                                        } else {
+                                            t.foreground.opacity(0.)
+                                        })
+                                        .text_color(if active { t.bright } else { t.secondary })
+                                        .children(active.then(|| {
+                                            div()
+                                                .absolute()
+                                                .left_0()
+                                                .right_0()
+                                                .bottom_0()
+                                                .h(px(2.))
+                                                .bg(t.accent)
+                                        }))
+                                        .on_click(cx.listener(move |app, _, _, cx| {
+                                            app.busy = true;
+                                            app.dispatch(Command::Respond(
+                                                e.clone(),
+                                                response.into(),
+                                            ));
+                                            cx.notify();
+                                        }))
+                                }),
+                            ),
+                    ),
+            );
+        }
         if !e.notes.is_empty() {
             content = content.child(
                 div()
+                    .pt(rems(0.6))
+                    .border_t_1()
+                    .border_color(t.divider())
                     .text_size(rems(0.78))
                     .whitespace_normal()
                     .child(e.notes.clone()),
             );
         }
-        if e.series_id.is_some() || e.repeat != Repeat::Never {
-            content = content.child(detail_line(
-                IconName::Repeat,
-                if e.remote_id.is_some() {
-                    "Part of a recurring event"
-                } else {
-                    "Recurring series"
-                }
-                .into(),
-                cx,
-            ));
-        }
-        for attendee in &e.attendees {
-            content = content.child(
-                div()
-                    .text_size(rems(0.72))
-                    .whitespace_normal()
-                    .child(format!("{} · {}", attendee.email, attendee.response)),
-            );
-        }
-        if e.remote_id.is_some() && e.attendees.iter().any(|a| a.me) {
-            let ev = e.clone();
-            content = content.child(
-                div().flex().gap(rems(0.3)).children(
-                    [
-                        ("Yes", "accepted"),
-                        ("Maybe", "tentative"),
-                        ("No", "declined"),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (label, response))| {
-                        let e = ev.clone();
-                        button(("rsvp", i), label, ButtonVariant::Secondary, cx)
-                            .disabled(self.busy)
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                app.busy = true;
-                                app.dispatch(Command::Respond(e.clone(), response.into()));
-                                cx.notify();
-                            }))
-                    }),
-                ),
-            );
-        }
-        let extra = f32::from(!e.location.is_empty()) * 2.5
-            + f32::from(!e.link.is_empty() || !e.conference_status.is_empty()) * 3.
-            + f32::from(e.repeat != Repeat::Never || e.series_id.is_some()) * 2.
-            + e.attendees.len() as f32 * 1.8
-            + f32::from(e.attendees.iter().any(|a| a.me)) * 3.
-            + if e.notes.is_empty() {
-                0.
-            } else {
-                2. + e.notes.chars().count() as f32 / 40. * 1.3
-            };
         let edit = e.clone();
+        let duplicate = e.clone();
         let delete = e.clone();
+        let series = e.series_id.is_some() && e.remote_id.is_none();
         let footer = if self.delete_confirm {
             div()
-                .p(rems(1.))
+                .p(rems(0.75))
                 .flex()
-                .flex_col()
+                .items_center()
                 .gap(rems(0.5))
-                .child(div().text_size(rems(0.74)).whitespace_normal().child(
-                    if e.series_id.is_some() && e.remote_id.is_none() {
-                        "Delete every event in this series?"
-                    } else {
-                        "Delete this event?"
-                    },
-                ))
+                .child(div().flex_1().whitespace_normal().child(if series {
+                    "Delete every event in this series?"
+                } else {
+                    "Delete this event?"
+                }))
                 .child(
-                    div()
-                        .flex()
-                        .gap(rems(0.5))
-                        .child(
-                            button("confirm-delete", "Delete", ButtonVariant::Primary, cx)
-                                .disabled(self.busy)
-                                .on_click(cx.listener(move |app, _, _, cx| {
-                                    app.busy = true;
-                                    app.dispatch(Command::Delete(delete.clone()));
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            button("cancel-delete", "Cancel", ButtonVariant::Secondary, cx)
-                                .on_click(cx.listener(|app, _, _, cx| {
-                                    app.delete_confirm = false;
-                                    cx.notify();
-                                })),
-                        ),
+                    button("cancel-delete", "Cancel", ButtonVariant::Secondary, cx).on_click(
+                        cx.listener(|app, _, _, cx| {
+                            app.delete_confirm = false;
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    button("confirm-delete", "Delete", ButtonVariant::Primary, cx)
+                        .debug_selector(|| "confirm-delete".into())
+                        .disabled(self.busy)
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.busy = true;
+                            app.dispatch(Command::Delete(delete.clone()));
+                            cx.notify();
+                        })),
                 )
         } else {
-            div().p(rems(1.)).child(
-                action_button(
-                    "edit-event",
-                    IconName::PencilLine,
-                    "Edit",
-                    ButtonVariant::Primary,
-                    cx,
+            div()
+                .p(rems(0.75))
+                .flex()
+                .items_center()
+                .gap(rems(0.4))
+                .child(
+                    action_button(
+                        "edit-event",
+                        IconName::PencilLine,
+                        if series { "Edit series" } else { "Edit" },
+                        ButtonVariant::Primary,
+                        cx,
+                    )
+                    .debug_selector(|| "edit-event".into())
+                    .disabled(!writable || self.busy)
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.open_editor(edit.clone(), true, window, cx)
+                    })),
                 )
-                .disabled(!writable || self.busy)
-                .on_click(cx.listener(move |app, _, window, cx| {
-                    app.open_editor(edit.clone(), true, window, cx)
-                })),
-            )
+                .child(
+                    tool_button("duplicate-event", IconName::Copy, "Duplicate", "", cx).on_click(
+                        cx.listener(move |app, _, window, cx| {
+                            app.duplicate(&duplicate, window, cx)
+                        }),
+                    ),
+                )
+                .child(div().flex_1())
+                .child(
+                    tool_button("delete-event", IconName::Trash, "Delete", "", cx)
+                        .disabled(!writable || self.busy)
+                        .hover(|s| s.text_color(t.danger))
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.delete_confirm = true;
+                            cx.notify();
+                        })),
+                )
         };
         div()
             .id("event-details")
@@ -235,29 +406,41 @@ impl Ocal {
             .role(gpui_kit::Role::Dialog)
             .aria_label("Event details")
             .absolute()
-            .right(px(12.))
-            .top(rems(4.5))
-            .w(rems(25.))
-            .max_w(window.viewport_size().width - px(24.))
-            .h(
-                (window.viewport_size().height - rems(6.).to_pixels(window.rem_size()))
-                    .min(rems((18. + extra).min(34.)).to_pixels(window.rem_size())),
+            .right_0()
+            .top(rems(HEADER))
+            .w(rems(24.))
+            .max_w(window.viewport_size().width)
+            .max_h(
+                window.viewport_size().height - rems(HEADER + STATUS).to_pixels(window.rem_size()),
             )
             .flex()
             .flex_col()
-            .border_1()
-            .border_t_2()
-            .border_color(color)
+            .border_l_1()
+            .border_b_1()
+            .border_color(t.control_border())
             .bg(t.background)
             .shadow_lg()
             .occlude()
             .child(
                 div()
-                    .px(rems(0.7))
-                    .py(rems(0.45))
+                    .h(rems(2.6))
+                    .flex_shrink_0()
+                    .pl(rems(1.))
+                    .pr(rems(0.5))
                     .flex()
-                    .justify_end()
-                    .gap(rems(0.3))
+                    .items_center()
+                    .gap(rems(0.5))
+                    .child(div().w(px(3.)).h(rems(1.1)).bg(color))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(rems(0.72))
+                            .text_color(t.secondary)
+                            .child(calendar_name),
+                    )
                     .child(more)
                     .child(
                         tool_button("close-details", IconName::X, "Close details", "Esc", cx)
@@ -270,11 +453,17 @@ impl Ocal {
                     ),
             )
             .child(content)
-            .child(footer.border_t_1().border_color(t.divider()))
+            .child(
+                footer
+                    .flex_shrink_0()
+                    .border_t_1()
+                    .border_color(t.divider()),
+            )
             .into_any_element()
     }
 }
-pub(super) fn detail_line(glyph: IconName, text: String, cx: &App) -> AnyElement {
+
+fn row(glyph: IconName, content: AnyElement, cx: &App) -> AnyElement {
     div()
         .flex()
         .gap(rems(0.7))
@@ -282,15 +471,43 @@ pub(super) fn detail_line(glyph: IconName, text: String, cx: &App) -> AnyElement
         .child(
             icon(glyph)
                 .size(rems(0.95))
+                .mt(rems(0.1))
                 .text_color(cx.omarchy().secondary),
         )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_size(rems(0.78))
-                .whitespace_normal()
-                .child(text),
-        )
+        .child(div().flex_1().min_w_0().text_size(rems(0.8)).child(content))
         .into_any_element()
+}
+
+pub(super) fn detail_line(glyph: IconName, text: String, cx: &App) -> AnyElement {
+    row(
+        glyph,
+        div()
+            .whitespace_normal()
+            .text_size(rems(0.78))
+            .child(text)
+            .into_any_element(),
+        cx,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_times_describe_upcoming_current_and_past_events() {
+        let mut e = Event::new(
+            "local",
+            NaiveDate::from_ymd_opt(2026, 10, 7).unwrap(),
+            "UTC",
+        )
+        .unwrap();
+        let at = |m: i64| e.start + Duration::minutes(m);
+        assert_eq!(relative_time(&e, at(-25)).unwrap(), "in 25 min");
+        assert_eq!(relative_time(&e, at(-180)).unwrap(), "in 3 h");
+        assert_eq!(relative_time(&e, at(20)).unwrap(), "Now · 40 min left");
+        assert_eq!(relative_time(&e, at(61)).unwrap(), "Ended");
+        e.all_day = Some((e.date(), e.date() + Duration::days(1)));
+        assert!(relative_time(&e, at(0)).is_none());
+    }
 }

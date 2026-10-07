@@ -212,11 +212,12 @@ pub fn zone(s: &str) -> Tz {
 }
 /// The desktop's IANA zone from `TZ` or `/etc/localtime`, falling back to UTC.
 pub fn system_zone() -> String {
+    let valid = |tz: &String| tz.parse::<Tz>().is_ok();
     std::env::var("TZ")
         .ok()
         .map(|tz| tz.trim_start_matches(':').to_owned())
-        .or_else(|| iana_time_zone::get_timezone().ok())
-        .filter(|tz| tz.parse::<Tz>().is_ok())
+        .filter(valid)
+        .or_else(|| iana_time_zone::get_timezone().ok().filter(valid))
         .unwrap_or_else(|| "UTC".into())
 }
 pub fn local_datetime(dt: NaiveDateTime, tz: &str) -> Result<DateTime<Utc>> {

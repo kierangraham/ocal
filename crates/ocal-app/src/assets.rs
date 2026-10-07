@@ -34,7 +34,9 @@ gpui_kit::assets::icon_assets!(
         Upload,
         CalendarCheck,
         CircleQuestionMark,
-        Layers
+        Layers,
+        CircleCheck,
+        CircleX
     ]
 );
 pub struct Assets;

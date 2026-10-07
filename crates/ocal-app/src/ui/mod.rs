@@ -278,6 +278,21 @@ impl Ocal {
         match event {
             WorkerEvent::Snapshot(s) => {
                 self.snapshot = s;
+                // Debug builds can open an event's details at launch, for screenshots.
+                #[cfg(debug_assertions)]
+                {
+                    static DONE: AtomicBool = AtomicBool::new(false);
+                    if let Ok(title) = std::env::var("OCAL_DEBUG_SELECT")
+                        && !DONE.swap(true, Ordering::Relaxed)
+                    {
+                        self.selected = self
+                            .snapshot
+                            .events
+                            .iter()
+                            .find(|e| e.title == title)
+                            .cloned();
+                    }
+                }
                 if self.status == "Saved · Generating Google Meet…"
                     && let Some(selected) = &self.selected
                     && let Some(updated) = self.snapshot.events.iter().find(|e| e.id == selected.id)
