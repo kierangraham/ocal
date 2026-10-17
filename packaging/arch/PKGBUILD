@@ -1,0 +1,54 @@
+# Maintainer: Kieran Graham <me@kierangraham.com>
+
+pkgname=ocal
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Native calendar app for Omarchy, with Google Calendar sync and local calendars'
+arch=('x86_64' 'aarch64')
+url='https://github.com/kierangraham/ocal'
+license=('MIT')
+depends=(
+  'dbus'
+  'gcc-libs'
+  'glibc'
+  'hicolor-icon-theme'
+  'libxcb'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'openssl'
+  'vulkan-icd-loader'
+  'wayland'
+)
+makedepends=('cargo' 'clang' 'pkgconf')
+optdepends=(
+  'gnome-keyring: stores Google account tokens (any Secret Service provider works)'
+  'xdg-desktop-portal: file dialogs for iCalendar import, export and custom Google clients'
+)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/kierangraham/ocal/archive/refs/tags/v$pkgver.tar.gz")
+# Update after the v0.1.0 tag is published: run `updpkgsums`.
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  make build
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --locked --release -p ocal-core
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  make install DESTDIR="$pkgdir" PREFIX=/usr
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

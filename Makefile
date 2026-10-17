@@ -1,5 +1,10 @@
 PREFIX ?= $(HOME)/.local
+DESTDIR ?=
 TARGET_DIR ?= target
+
+BINDIR := $(DESTDIR)$(PREFIX)/bin
+APPDIR := $(DESTDIR)$(PREFIX)/share/applications
+ICONDIR := $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps
 
 .PHONY: run demo build check test lint install uninstall clean
 run:
@@ -16,11 +21,11 @@ lint:
 	cargo fmt --all -- --check
 	cargo clippy --locked --workspace --all-targets --target-dir "$(TARGET_DIR)" -- -D warnings
 install: build
-	install -Dm755 "$(TARGET_DIR)/release/ocal" "$(PREFIX)/bin/ocal"
-	install -Dm644 packaging/ocal.desktop "$(PREFIX)/share/applications/ocal.desktop"
-	install -Dm644 assets/ocal.svg "$(PREFIX)/share/icons/hicolor/scalable/apps/ocal.svg"
-	@command -v update-desktop-database >/dev/null && update-desktop-database "$(PREFIX)/share/applications" || true
+	install -Dm755 "$(TARGET_DIR)/release/ocal" "$(BINDIR)/ocal"
+	install -Dm644 packaging/ocal.desktop "$(APPDIR)/ocal.desktop"
+	install -Dm644 assets/ocal.svg "$(ICONDIR)/ocal.svg"
+	@if [ -z "$(DESTDIR)" ] && command -v update-desktop-database >/dev/null; then update-desktop-database "$(APPDIR)" || true; fi
 uninstall:
-	rm -f "$(PREFIX)/bin/ocal" "$(PREFIX)/share/applications/ocal.desktop" "$(PREFIX)/share/icons/hicolor/scalable/apps/ocal.svg"
+	rm -f "$(BINDIR)/ocal" "$(APPDIR)/ocal.desktop" "$(ICONDIR)/ocal.svg"
 clean:
 	cargo clean --target-dir "$(TARGET_DIR)"

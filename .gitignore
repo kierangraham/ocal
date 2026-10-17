@@ -18,3 +18,9 @@ client_secret*.json
 *.webm
 *.mkv
 *.gif
+
+# makepkg output
+/packaging/arch/src/
+/packaging/arch/pkg/
+/packaging/arch/*.tar.gz
+/packaging/arch/*.pkg.tar.*
