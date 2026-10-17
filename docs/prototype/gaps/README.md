@@ -2,6 +2,14 @@
 
 This compares the HTML prototype (`docs/prototype/redesign.html`, open it in a browser) with the app as it is in the source today. It lists what the app needs to gain to match the prototype, and what the prototype leaves out that the app already does.
 
+**Status (17 October 2026):** implemented. The checklists below record the plan; the app now matches the prototype's layout, surfaces and behaviour, with these deliberate differences:
+
+- Controls drawn by gpui-omarchy stay stock rather than being restyled to match the mock-up: text inputs keep their fill (the composer title and search field), the date picker is its outlined button, and All day is the standard switch.
+- Search keeps its results list rather than filtering the view in place.
+- Everything marked **keep** below stays: the time cursor, Shift ranges, context menus, RSVP and the guest list, the full editor fields, account groups and narrow layouts.
+
+Screenshots of the finished app are in [`docs/validation.md`](../../validation.md).
+
 The prototype follows Omail's redesign prototype (`docs/prototype/redesign.html` in the Omail repository): the same colour tokens, inset sidebar, raised sheet, pill tabs, icon buttons, tooltips, toast and floating "reply box" cards. Where this doc says "like Omail", it means that prototype.
 
 ![Prototype week view](00-overview-week.png)
