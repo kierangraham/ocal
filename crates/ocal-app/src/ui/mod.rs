@@ -230,6 +230,10 @@ pub struct Ocal {
     form_scroll: ScrollHandle,
     agenda_scroll: ScrollHandle,
     grid_bounds: HashMap<NaiveDate, Bounds<Pixels>>,
+    /// Where each event was last drawn, by event ID, so its details card can sit
+    /// beside it. Views record this with `anchor_event`.
+    #[allow(dead_code)]
+    event_anchors: HashMap<String, Bounds<Pixels>>,
     dragging: bool,
     reveal_cursor: bool,
     zoom: f32,
@@ -337,6 +341,7 @@ impl Ocal {
             form_scroll: ScrollHandle::new(),
             agenda_scroll: ScrollHandle::new(),
             grid_bounds: HashMap::new(),
+            event_anchors: HashMap::new(),
             dragging: false,
             reveal_cursor: true,
             zoom: 1.,
@@ -895,6 +900,22 @@ impl Ocal {
         self.delete_confirm = false;
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+    /// Record where `element` is drawn as the anchor for event `id`.
+    #[allow(dead_code)]
+    pub(super) fn anchor_event<E: gpui_kit::ParentElement>(
+        &self,
+        element: E,
+        id: &str,
+        cx: &Context<Self>,
+    ) -> E {
+        let target = cx.entity().downgrade();
+        let id = id.to_owned();
+        element.on_prepaint(move |bounds, _, cx| {
+            let _ = target.update(cx, |app, _| {
+                app.event_anchors.insert(id, bounds);
+            });
+        })
     }
     /// Mark a task done or not done, wherever its checkbox is drawn.
     pub(super) fn toggle_task(&mut self, e: &Event, cx: &mut Context<Self>) {
