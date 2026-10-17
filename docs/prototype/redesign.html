@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ocal — redesign prototype</title>
+<style>
+/* Omarchy tokens, shared with the Omail prototype (gpui-omarchy's Tokyo Night and Flexoki Light). */
+.app {
+  --background:#1a1b26; --surface:#24283b; --inset:#13141c;
+  --fg:#a9b1d6; --bright:#c0caf5; --accent:#7aa2f7; --on-accent:#13141c;
+  --selection:#292e42; --danger:#f7768e; --warning:#e0af68; --success:#9ece6a;
+  --violet:#bb9af7; --cyan:#7dcfff; --orange:#ff9e64;
+  --muted: rgb(169 177 214 / .58);
+  --faint: rgb(169 177 214 / .38);
+  --hair: rgb(169 177 214 / .07);
+  --hover: rgb(169 177 214 / .05);
+  --shade: rgb(0 0 0 / .13);
+  --sheet-shadow: 0 0 0 1px rgb(169 177 214 / .06), 0 12px 40px rgb(0 0 0 / .35);
+  --pop-shadow: 0 0 0 1px var(--hair), 0 12px 34px rgb(0 0 0 / .34);
+}
+.app.light {
+  --background:#fffcf0; --surface:#f2f0e5; --inset:#e6e4d9;
+  --fg:#403e3c; --bright:#100f0f; --accent:#205ea6; --on-accent:#fffcf0;
+  --selection:#e9e6da; --danger:#af3029; --warning:#855b00; --success:#526600;
+  --violet:#5e409d; --cyan:#24837b; --orange:#bc5215;
+  --muted: rgb(16 15 15 / .55);
+  --faint: rgb(16 15 15 / .36);
+  --hair: rgb(16 15 15 / .08);
+  --hover: rgb(16 15 15 / .04);
+  --shade: rgb(16 15 15 / .025);
+  --sheet-shadow: 0 0 0 1px rgb(16 15 15 / .07), 0 10px 30px rgb(16 15 15 / .08);
+  --pop-shadow: 0 0 0 1px var(--hair), 0 10px 28px rgb(16 15 15 / .12);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font: 14px/1.45 Inter, "Inter Variable", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+button, input { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+kbd { font: 500 10.5px/1 ui-monospace, "JetBrainsMono Nerd Font", monospace; color: var(--faint); padding: 3px 5px; border-radius: 4px; background: var(--hover); }
+
+.stage { width: 1440px; height: 900px; transform-origin: 0 0; }
+.app { width: 1440px; height: 900px; display: flex; position: relative; background: var(--inset); color: var(--fg); border-radius: 14px; overflow: hidden; user-select: none; transition: background .2s; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--c); }
+.dot.hollow { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+.ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.icon-btn { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); transition: background .12s, color .12s; flex: none; }
+.icon-btn:hover { background: var(--hover); color: var(--bright); }
+.sep { width: 1px; height: 16px; background: var(--hair); margin: 0 6px; flex: none; }
+.tabs { display: flex; gap: 2px; }
+.tabs button { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 99px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.tabs button:hover { color: var(--bright); }
+.tabs button.on { background: var(--selection); color: var(--bright); font-weight: 500; }
+.tabs .dot { width: 7px; height: 7px; }
+.chip { flex: none; font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 99px; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
+.send { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; transition: opacity .15s, filter .15s; flex: none; }
+.send:hover { filter: brightness(1.08); }
+.send kbd { color: var(--on-accent); background: rgb(0 0 0 / .14); padding: 2px 4px; }
+.send.idle { opacity: .45; }
+.modes { display: flex; gap: 2px; }
+.modes button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 7px; font-size: 12.5px; color: var(--muted); }
+.modes button:hover { background: var(--hover); color: var(--bright); }
+.modes button.on { background: var(--hover); color: var(--bright); }
+.modes button.danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.modes svg { width: 14px; height: 14px; }
+.modes button.send, .modes button.send:hover { height: 30px; padding: 0 12px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+
+/* ── Sidebar: sits on the inset tone, no borders ─────────────────── */
+.side { width: 232px; flex: none; display: flex; flex-direction: column; padding: 14px 12px 12px; overflow: hidden; transition: width .2s, padding .2s, opacity .2s; }
+.app.collapsed .side { width: 0; padding-inline: 0; opacity: 0; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 16px; }
+.brand-mark { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: linear-gradient(140deg, var(--accent), var(--violet)); color: var(--on-accent); }
+.brand-mark svg { width: 15px; height: 15px; stroke-width: 2.2; }
+.brand b { color: var(--bright); font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.brand .demo { margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); padding: 3px 7px; border-radius: 99px; }
+.compose { display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 12px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent); transition: filter .15s, transform .15s; flex: none; }
+.compose:hover { filter: brightness(1.08); }
+.compose:active { transform: translateY(1px); }
+.compose kbd { margin-left: auto; color: var(--on-accent); background: rgb(0 0 0 / .12); }
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; margin: 0 -4px; padding: 0 4px; }
+
+.mini { margin-top: 16px; padding: 0 2px; }
+.mini-head { display: flex; align-items: center; padding: 0 0 4px 8px; }
+.mini-head b { flex: 1; color: var(--bright); font-weight: 600; font-size: 13px; }
+.mini-head .icon-btn { width: 26px; height: 26px; }
+.mini-head svg { width: 14px; height: 14px; }
+.mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 1px; }
+.mini-wd { height: 22px; line-height: 22px; text-align: center; font-size: 10.5px; font-weight: 500; color: var(--faint); }
+.md { height: 27px; display: grid; place-items: center; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.md span { width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; transition: background .12s; }
+.md:hover span { background: var(--hover); color: var(--bright); }
+.md.out { color: var(--faint); }
+.md.band { background: var(--hover); }
+.md.band.first { border-radius: 99px 0 0 99px; }
+.md.band.last { border-radius: 0 99px 99px 0; }
+.md.sel span { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--bright); }
+.md.today span { background: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: none; }
+
+.now { margin-top: 14px; padding: 12px 14px 12px; border-radius: 12px; cursor: pointer; background: color-mix(in srgb, var(--surface) 45%, transparent); transition: background .12s; }
+.app.light .now { background: color-mix(in srgb, var(--surface) 80%, transparent); }
+.now:hover { background: var(--selection); }
+.now-label { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 500; color: var(--faint); }
+.now-label .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 20%, transparent); }
+.now-label .left { margin-left: auto; font-variant-numeric: tabular-nums; }
+.now b { display: block; margin-top: 6px; color: var(--bright); font-weight: 600; }
+.now small { display: block; font-size: 12px; color: var(--muted); }
+.progress { margin-top: 10px; height: 3px; border-radius: 2px; background: var(--hair); overflow: hidden; }
+.progress i { display: block; height: 100%; border-radius: 2px; background: var(--c); }
+
+.section { margin: 18px 10px 4px; font-size: 11px; font-weight: 500; color: var(--faint); display: flex; justify-content: space-between; align-items: center; }
+.group { padding: 8px 10px 2px; font-size: 11px; font-weight: 500; color: var(--faint); }
+.nav { display: flex; flex-direction: column; gap: 1px; }
+.nav button { display: flex; align-items: center; gap: 11px; height: 34px; padding: 0 10px; border-radius: 8px; color: var(--fg); text-align: left; min-width: 0; }
+.nav button:hover { background: var(--hover); }
+.nav .dot { margin-inline: 4px; }
+.nav .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav .count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.nav button.hidden-cal { color: var(--faint); }
+.sets { padding: 2px 4px 4px; }
+.side-foot { flex: none; display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 8px 6px 2px; font-size: 12px; color: var(--muted); }
+.side-foot .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
+.side-foot .icon-btn { width: 28px; height: 28px; border-radius: 7px; }
+.side-foot .icon-btn:first-of-type { margin-left: auto; }
+
+/* ── The sheet ───────────────────────────────────────────────────── */
+.sheet { flex: 1; min-width: 0; margin: 8px 8px 8px 0; position: relative; display: flex; flex-direction: column; background: var(--background); border-radius: 12px; box-shadow: var(--sheet-shadow); overflow: hidden; transition: margin .2s; }
+.app.collapsed .sheet { margin-left: 8px; }
+.bar { height: 56px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 14px 0 12px; }
+.bar h1 { margin: 0 0 0 4px; font-size: 20px; font-weight: 600; letter-spacing: -.015em; color: var(--bright); white-space: nowrap; }
+.bar h1 em { font-style: normal; color: var(--accent); }
+.bar .sub { font-size: 12px; color: var(--muted); padding: 3px 0 0 8px; white-space: nowrap; }
+.bar .grow { flex: 1; }
+.bar .today { height: 26px; padding: 0 10px; border-radius: 99px; font-size: 12.5px; font-weight: 500; color: var(--bright); }
+.bar .today:hover { background: var(--hover); }
+.bar .today.on { color: var(--muted); font-weight: 400; }
+.search { display: flex; align-items: center; gap: 9px; width: 220px; height: 36px; padding: 0 10px 0 11px; border-radius: 10px; background: var(--hover); color: var(--muted); transition: box-shadow .15s, background .15s; }
+.search:focus-within { background: transparent; box-shadow: 0 0 0 1.5px var(--accent); }
+.search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--bright); font-size: 13px; }
+.search input::placeholder { color: var(--muted); }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── Time grid (day / week) ──────────────────────────────────────── */
+.cols { display: grid; grid-template-columns: 58px repeat(var(--n), minmax(0, 1fr)); padding-right: 10px; }
+.dh { height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; }
+.dh .wd { font-size: 12.5px; color: var(--muted); }
+.dh .n { min-width: 26px; height: 26px; padding: 0 4px; border-radius: 99px; display: grid; place-items: center; font-size: 14px; font-weight: 600; color: var(--bright); font-variant-numeric: tabular-nums; transition: background .12s; }
+.dh:hover .n { background: var(--hover); }
+.dh.weekend .wd, .dh.weekend .n { color: var(--faint); }
+.dh.today .wd { color: var(--accent); font-weight: 500; }
+.dh.today .n { background: var(--accent); color: var(--on-accent); }
+
+.allday { padding-bottom: 6px; box-shadow: 0 1px 0 var(--hair); position: relative; z-index: 2; }
+.allday .lab { font-size: 11px; color: var(--faint); text-align: right; padding: 4px 10px 0 0; }
+.allday .cell { display: flex; flex-direction: column; gap: 2px; padding: 0 3px; min-width: 0; }
+.pill { height: 22px; display: flex; align-items: center; gap: 7px; padding: 0 8px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; background: color-mix(in srgb, var(--c) 16%, var(--background)); color: color-mix(in srgb, var(--c) 50%, var(--bright)); transition: background .12s; }
+.pill:hover { background: color-mix(in srgb, var(--c) 24%, var(--background)); }
+.pill.sel { background: var(--c); color: var(--on-accent); }
+.pill.is-task { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 1px var(--hair); }
+.pill.is-task:hover { background: var(--hover); }
+.check { width: 13px; height: 13px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--c); flex: none; display: grid; place-items: center; cursor: pointer; }
+.check.done { background: var(--c); box-shadow: none; }
+.check svg { width: 9px; height: 9px; stroke: var(--on-accent); stroke-width: 3.2; }
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; position: relative; scrollbar-width: thin; scrollbar-color: var(--hair) transparent; }
+.grid { height: calc(52px * 24); position: relative; padding-right: 10px; }
+.grid .cols { height: 100%; padding-right: 0; }
+.gutter { position: relative; }
+.hl { position: absolute; right: 10px; transform: translateY(-50%); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.col { position: relative; background-image: linear-gradient(to bottom, var(--hair) 1px, transparent 1px); background-size: 100% 52px; box-shadow: inset 1px 0 0 color-mix(in srgb, var(--hair) 45%, transparent); }
+.col.weekend { background-color: var(--shade); }
+.col.today { background-color: color-mix(in srgb, var(--accent) 4%, transparent); }
+.offhours { position: absolute; left: 0; right: 0; background: var(--shade); pointer-events: none; }
+
+.ev { position: absolute; overflow: hidden; cursor: pointer; border-radius: 7px; padding: 4px 6px 3px 11px; background: color-mix(in srgb, var(--c) 16%, var(--background)); color: color-mix(in srgb, var(--c) 50%, var(--bright)); box-shadow: 0 0 0 1.5px var(--background); transition: background .12s, box-shadow .12s; }
+.ev::before { content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; background: var(--c); }
+.ev:hover { background: color-mix(in srgb, var(--c) 24%, var(--background)); }
+.ev .t { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev .s { font-size: 11px; opacity: .75; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev.short { display: flex; align-items: center; gap: 6px; padding-top: 0; padding-bottom: 0; }
+.ev.short .s { flex: none; }
+.ev.past { background: color-mix(in srgb, var(--c) 9%, var(--background)); color: color-mix(in srgb, var(--c) 30%, var(--muted)); }
+.ev.past::before { opacity: .55; }
+.ev.sel { z-index: 9 !important; background: var(--c); color: var(--on-accent); box-shadow: 0 0 0 1.5px var(--background), 0 8px 22px -8px color-mix(in srgb, var(--c) 80%, transparent); }
+.ev.sel::before { background: rgb(0 0 0 / .25); }
+.ghost { position: absolute; left: 3px; right: 4px; z-index: 8; border-radius: 7px; pointer-events: none; background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent); padding: 4px 8px; font-size: 11.5px; font-weight: 600; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
+.nowline { position: absolute; left: 58px; right: 10px; height: 0; border-top: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); pointer-events: none; z-index: 10; }
+.nowseg { position: absolute; height: 2px; margin-top: -1px; background: var(--danger); pointer-events: none; z-index: 10; border-radius: 1px; }
+.nowseg::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.nowpill { position: absolute; left: 10px; transform: translateY(-50%); padding: 2px 5px; border-radius: 5px; background: var(--danger); color: var(--on-accent); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; z-index: 10; }
+
+/* ── Month ───────────────────────────────────────────────────────── */
+.month { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
+.mhead { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.mhead div { padding: 0 10px 8px; font-size: 12px; color: var(--muted); }
+.mgrid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: repeat(6, minmax(0, 1fr)); }
+.mc { padding: 6px 5px 4px; min-width: 0; overflow: hidden; box-shadow: inset 0 1px 0 var(--hair), inset 1px 0 0 color-mix(in srgb, var(--hair) 45%, transparent); }
+.mc.weekend { background: var(--shade); }
+.mc .mn { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 5px; margin: 0 0 3px 2px; border-radius: 99px; font-size: 12px; font-weight: 600; color: var(--bright); font-variant-numeric: tabular-nums; cursor: pointer; }
+.mc .mn:hover { background: var(--hover); }
+.mc.out .mn { color: var(--faint); font-weight: 500; }
+.mc.out .me, .mc.out .pill { opacity: .45; }
+.mc.today .mn { background: var(--accent); color: var(--on-accent); }
+.mc.sel:not(.today) .mn { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.me { display: flex; align-items: center; gap: 6px; height: 20px; padding: 0 5px; border-radius: 5px; font-size: 12px; cursor: pointer; color: var(--fg); }
+.me:hover { background: var(--hover); }
+.me .dot { width: 6px; height: 6px; }
+.me .tm { margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+.me.sel, .me.sel.past { background: var(--c); color: var(--on-accent); }
+.me.sel .tm { color: inherit; opacity: .7; }
+.me.sel .dot { background: var(--on-accent); }
+.me.past { color: var(--muted); }
+.more { font-size: 11px; color: var(--muted); padding: 1px 6px; cursor: pointer; }
+.more:hover { color: var(--bright); }
+
+/* ── Agenda & tasks ──────────────────────────────────────────────── */
+.list { flex: 1; overflow-y: auto; padding: 0 12px 32px; scrollbar-width: thin; scrollbar-color: var(--hair) transparent; }
+.list-in { max-width: 860px; }
+.day-h { display: flex; align-items: baseline; gap: 8px; padding: 16px 12px 6px; position: sticky; top: 0; background: var(--background); z-index: 1; }
+.day-h b { font-size: 14px; font-weight: 600; color: var(--bright); }
+.day-h span { font-size: 12px; color: var(--muted); }
+.day-h.today b { color: var(--accent); }
+.ag { display: grid; grid-template-columns: 88px 3px 1fr auto; gap: 14px; align-items: center; min-height: 48px; padding: 7px 12px; border-radius: 10px; cursor: pointer; transition: background .12s; }
+.ag:hover { background: var(--hover); }
+.ag.sel { background: var(--selection); }
+.ag .tm { font-size: 12.5px; color: var(--fg); font-variant-numeric: tabular-nums; line-height: 1.3; }
+.ag .tm small { display: block; color: var(--muted); font-size: 11.5px; }
+.ag .bar3 { width: 3px; align-self: stretch; border-radius: 2px; background: var(--c); }
+.ag .t { color: var(--bright); font-weight: 500; }
+.ag .s { color: var(--muted); font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
+.ag .s svg { width: 13px; height: 13px; }
+.ag.past .t, .ag.past .tm { color: var(--muted); }
+.task { display: flex; align-items: center; gap: 12px; height: 42px; padding: 0 12px; border-radius: 10px; cursor: pointer; }
+.task:hover { background: var(--hover); }
+.task .check { width: 16px; height: 16px; }
+.task .check svg { width: 11px; height: 11px; }
+.task .t { flex: 1; color: var(--bright); }
+.task.done .t { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+.task .due { font-size: 12px; color: var(--muted); }
+.task .due.today { color: var(--accent); font-weight: 500; }
+.empty { padding: 60px 20px; text-align: center; color: var(--muted); }
+
+/* ── Floating cards, like Omail's reply box ──────────────────────── */
+.card { position: absolute; z-index: 50; border-radius: 14px; background: var(--background); box-shadow: var(--pop-shadow); animation: rise .16s cubic-bezier(.2, .8, .3, 1); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .card, .toast, .side, .sheet { animation: none; transition: none; } }
+.pop { width: 340px; padding-bottom: 8px; }
+.pop-top { display: flex; align-items: center; gap: 8px; padding: 12px 10px 0 18px; font-size: 12px; color: var(--muted); }
+.pop-top .grow { flex: 1; }
+.pop-top .icon-btn { width: 28px; height: 28px; }
+.pop h2 { margin: 8px 18px 4px; font-size: 20px; line-height: 1.25; font-weight: 600; letter-spacing: -.015em; color: var(--bright); text-wrap: balance; }
+.pop .meta { margin: 0 18px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pop .meta b { color: var(--fg); font-weight: 500; }
+.rows { padding: 10px 18px 2px; }
+.row { display: flex; gap: 11px; align-items: flex-start; padding: 5px 0; font-size: 13px; line-height: 1.5; color: var(--fg); }
+.row svg { color: var(--muted); margin-top: 2px; }
+.row .send { margin: -3px 0 0 auto; height: 28px; }
+.row small { color: var(--muted); font-size: 12px; display: block; }
+.foot { display: flex; align-items: center; gap: 2px; padding: 8px 8px 0 10px; margin-top: 6px; box-shadow: inset 0 1px 0 var(--hair); }
+.foot .grow { flex: 1; }
+
+.comp { width: 480px; left: calc(50% - 240px + 116px); top: 70px; padding-bottom: 8px; }
+.app.collapsed .comp { left: calc(50% - 240px); }
+.comp:focus-within { box-shadow: 0 0 0 1.5px var(--accent), 0 12px 34px rgb(0 0 0 / .3); }
+.comp-title { display: block; width: 100%; border: 0; outline: 0; background: none; padding: 16px 18px 6px; font-size: 18px; font-weight: 600; color: var(--bright); }
+.comp-title::placeholder { color: var(--faint); }
+.fields { padding: 2px 12px 4px; }
+.field { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 6px; }
+.field > svg { color: var(--muted); }
+.field input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--bright); font-size: 13px; }
+.field input::placeholder { color: var(--muted); }
+.tchip { height: 28px; padding: 0 9px; border-radius: 7px; background: var(--hover); display: flex; align-items: center; color: var(--bright); font-size: 13px; font-variant-numeric: tabular-nums; }
+.tchip input { width: 40px; text-align: center; }
+.field .hint { color: var(--muted); font-size: 12px; }
+
+.keys { left: 12px; bottom: 52px; width: 260px; padding: 12px 14px; }
+.keys .k { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12.5px; color: var(--muted); }
+.keys .k kbd { margin-left: 3px; }
+
+.toast { position: absolute; left: 50%; bottom: 24px; z-index: 60; transform: translate(-50%, 8px); opacity: 0; display: flex; align-items: center; gap: 14px; padding: 9px 10px 9px 14px; border-radius: 10px; background: var(--bright); color: var(--background); font-size: 13px; font-weight: 500; transition: opacity .18s, transform .18s; pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast button { color: var(--accent); font-weight: 600; padding: 2px 6px; border-radius: 6px; filter: brightness(.8); }
+.app.light .toast button { filter: brightness(1.6); }
+.tip { position: fixed; z-index: 99; pointer-events: none; padding: 5px 8px; border-radius: 6px; background: var(--tip-bg, #c0caf5); color: var(--tip-fg, #1a1b26); font: 500 11.5px/1.3 Inter, system-ui, sans-serif; white-space: nowrap; opacity: 0; transition: opacity .1s; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage"><div class="app" id="app"></div></div>
+<div class="tip" id="tip"></div>
+<script>
+const I = {
+  mark: '<rect x="3" y="4" width="18" height="17" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  sync: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/>',
+  gear: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.2a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.2a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.2a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.2a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/>',
+  side: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/>',
+  pin: '<path d="M20 10c0 5-5.5 10.2-7.4 11.8a1 1 0 0 1-1.2 0C9.5 20.2 4 15 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+  video: '<path d="m16 13 5.2 3.5a.5.5 0 0 0 .8-.4V7.9a.5.5 0 0 0-.8-.4L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
+  notes: '<path d="M15 18H3M17 6H3M21 12H3"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  cal: '<rect x="3" y="4" width="18" height="17" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/>',
+  copy: '<rect width="13" height="13" x="9" y="9" rx="2"/><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  keys: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/>',
+};
+const svg = (k) => `<svg class="i" viewBox="0 0 24 24">${I[k]}</svg>`;
+const $ = (id) => document.getElementById(id);
+
+// ── Dates: plain YYYY-MM-DD strings; weeks start on Sunday, like Ocal ──
+const TODAY = '2026-10-17';
+const NOW = 10 * 60 + 40;
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MO = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MOL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const toD = (s) => new Date(s + 'T00:00:00Z');
+const toS = (d) => d.toISOString().slice(0, 10);
+const add = (s, n) => { const d = toD(s); d.setUTCDate(d.getUTCDate() + n); return toS(d); };
+const addMonths = (s, n) => { const d = toD(s); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n); return toS(d); };
+const dow = (s) => toD(s).getUTCDay();
+const dom = (s) => toD(s).getUTCDate();
+const mon = (s) => toD(s).getUTCMonth();
+const year = (s) => toD(s).getUTCFullYear();
+const weekStart = (s) => add(s, -dow(s));
+const monthStart = (s) => s.slice(0, 8) + '01';
+const hm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const parseHm = (t) => { const m = /^(\d{1,2}):?(\d{2})$/.exec(t.trim()); return m ? Math.min(+m[1], 23) * 60 + Math.min(+m[2], 59) : null; };
+const dur = (m) => m < 60 ? `${m} min` : m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`;
+const shortDate = (s) => `${WD[dow(s)]} ${dom(s)} ${MO[mon(s)]}`;
+const longDate = (s) => `${WDL[dow(s)]} ${dom(s)} ${MOL[mon(s)]}`;
+const relDay = (s) => s === TODAY ? 'Today' : s === add(TODAY, 1) ? 'Tomorrow' : s === add(TODAY, -1) ? 'Yesterday' : null;
+function isoWeek(s) {
+  const thu = add(s, 3 - ((dow(s) + 6) % 7));
+  const jan4 = `${year(thu)}-01-04`;
+  return 1 + Math.round((toD(thu) - toD(add(jan4, 3 - ((dow(jan4) + 6) % 7)))) / 864e5 / 7);
+}
+
+// ── Demo data, mirroring ocal-core/src/demo.rs ──
+const CALS = [
+  { id: 'work', name: 'Work', color: 'var(--violet)' },
+  { id: 'personal', name: 'Personal', color: 'var(--accent)' },
+  { id: 'tasks', name: 'Tasks', color: 'var(--success)' },
+];
+const SETS = [
+  { id: 'all', name: 'All', cals: ['work', 'personal', 'tasks'] },
+  { id: 'work', name: 'Work', cals: ['work'] },
+  { id: 'personal', name: 'Personal', cals: ['personal', 'tasks'] },
+];
+const cal = (id) => CALS.find((c) => c.id === id);
+const PATTERN = [
+  [0, 9, 0, 30, 'Weekly planning', 'work', 'Studio'],
+  [0, 10, 0, 90, 'Deep work', 'work', ''],
+  [0, 10, 30, 30, 'Design review', 'personal', ''],
+  [0, 13, 0, 45, 'Coffee with Oliver', 'personal', 'Established'],
+  [1, 9, 30, 30, 'Team stand-up', 'work', ''],
+  [1, 11, 0, 60, 'Product review', 'work', 'Studio'],
+  [1, 15, 0, 60, 'Long walk', 'personal', 'Botanic Gardens'],
+  [2, 10, 0, 120, 'Build time', 'work', ''],
+  [2, 13, 0, 60, 'Lunch with friends', 'personal', ''],
+  [2, 16, 0, 30, 'Catch-up', 'work', ''],
+  [3, 9, 0, 60, 'Project kickoff', 'work', ''],
+  [3, 11, 30, 45, 'Dentist', 'personal', ''],
+  [3, 14, 0, 90, 'Focus time', 'work', ''],
+  [4, 9, 30, 30, 'Weekly review', 'work', ''],
+  [4, 12, 0, 60, 'Friday lunch', 'personal', ''],
+  [4, 15, 0, 30, 'Wrap up', 'work', ''],
+  [5, 10, 0, 120, 'Coastal walk', 'personal', 'North coast'],
+  [6, 10, 0, 60, 'Slow Sunday', 'personal', ''],
+  [6, 14, 0, 90, 'Read and reset', 'personal', ''],
+];
+const ONE_OFF = new Set(['Coffee with Oliver', 'Long walk', 'Lunch with friends', 'Dentist', 'Coastal walk', 'Product review', 'Project kickoff']);
+let nextId = 1;
+let events = [];
+for (const monday of ['2026-09-28', '2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26']) {
+  for (const [day, h, m, len, title, c, loc] of PATTERN) {
+    if (monday !== '2026-10-12' && ONE_OFF.has(title)) continue;
+    const stand = title === 'Team stand-up';
+    events.push({
+      id: nextId++, date: add(monday, day), start: h * 60 + m, end: h * 60 + m + len, title, cal: c, loc,
+      link: stand ? 'meet.google.com/abc-defg-hij' : '',
+      notes: stand ? 'A short check-in: progress, plans, and anything in the way.' : '',
+      guests: stand ? 4 : 0,
+    });
+  }
+}
+events.push({ id: nextId++, date: '2026-10-14', allDay: true, title: 'A little space to think', cal: 'personal' });
+events.push({ id: nextId++, date: '2026-10-22', allDay: true, title: 'Mum’s birthday', cal: 'personal' });
+events.push({ id: nextId++, date: TODAY, task: true, title: 'Review the design notes', cal: 'tasks', done: false });
+events.push({ id: nextId++, date: '2026-10-15', task: true, title: 'Renew passport', cal: 'tasks', done: true });
+events.push({ id: nextId++, date: '2026-10-19', task: true, title: 'Book train tickets', cal: 'tasks', done: false });
+events.push({ id: nextId++, date: '2026-10-23', task: true, title: 'Send invoice', cal: 'tasks', done: false });
+
+// ── State ──
+const S = { view: 'week', date: TODAY, set: 'all', hidden: new Set(), sel: null, composer: null, keys: false, q: '', scrollTop: null, removed: null };
+const visible = (e) => !S.hidden.has(e.cal) && SETS.find((s) => s.id === S.set).cals.includes(e.cal)
+  && (!S.q || `${e.title} ${e.loc || ''}`.toLowerCase().includes(S.q.toLowerCase()));
+const on = (d) => events.filter((e) => e.date === d && visible(e));
+const timed = (d) => on(d).filter((e) => !e.allDay && !e.task).sort((a, b) => a.start - b.start || b.end - a.end);
+const byTime = (a, b) => (a.allDay || a.task ? -1 : a.start) - (b.allDay || b.task ? -1 : b.start);
+const isPast = (e) => e.date < TODAY || (e.date === TODAY && !e.allDay && !e.task && e.end <= NOW);
+const isSel = (e) => S.sel === e.id;
+const checkbox = (e) => `<span class="check ${e.done ? 'done' : ''}" data-done="${e.id}" data-tip="${e.done ? 'Mark not done' : 'Mark done'}">${e.done ? svg('check') : ''}</span>`;
+
+// ── Sidebar ──
+function sidebar() {
+  const ms = monthStart(S.date), first = weekStart(ms);
+  const band = S.view === 'week' ? weekStart(S.date) : null;
+  let days = '';
+  for (let i = 0; i < 42; i++) {
+    const d = add(first, i);
+    const cls = ['md', mon(d) !== mon(ms) && 'out', d === TODAY && 'today', d === S.date && 'sel'];
+    if (band && d >= band && d < add(band, 7)) cls.push('band', d === band && 'first', d === add(band, 6) && 'last');
+    days += `<div class="${cls.filter(Boolean).join(' ')}" data-go="${d}"><span>${dom(d)}</span></div>`;
+  }
+  const current = timed(TODAY).find((e) => e.start <= NOW && e.end > NOW);
+  const now = current ? `<div class="now" style="--c:${cal(current.cal).color}" data-ev="${current.id}">
+      <div class="now-label"><span class="pulse"></span>Now<span class="left">${dur(current.end - NOW)} left</span></div>
+      <b class="ell">${current.title}</b>
+      <small class="ell">${[current.loc, `${hm(current.start)} – ${hm(current.end)}`].filter(Boolean).join(' · ')}</small>
+      <div class="progress"><i style="width:${Math.round(((NOW - current.start) / (current.end - current.start)) * 100)}%"></i></div>
+    </div>` : '';
+  let next = '', shown = 0;
+  for (let i = 0; i < 4 && shown < 3; i++) {
+    const d = add(TODAY, i);
+    const list = on(d).filter((e) => !isPast(e) && e !== current && !(e.task && e.done)).sort(byTime).slice(0, 3 - shown);
+    if (!list.length) continue;
+    next += `<div class="group">${relDay(d) || shortDate(d)}</div>` + list.map((e) => `
+      <button data-ev="${e.id}"><span class="dot" style="--c:${cal(e.cal).color}"></span><span class="name">${e.title}</span>
+      <span class="count">${e.task ? 'Task' : e.allDay ? 'All day' : hm(e.start)}</span></button>`).join('');
+    shown += list.length;
+  }
+  const setCals = SETS.find((s) => s.id === S.set).cals;
+  const ws = weekStart(S.date);
+  const cals = CALS.filter((c) => setCals.includes(c.id)).map((c) => {
+    const hidden = S.hidden.has(c.id);
+    return `<button class="${hidden ? 'hidden-cal' : ''}" data-cal="${c.id}" data-tip="${hidden ? 'Show' : 'Hide'} ${c.name}">
+      <span class="dot ${hidden ? 'hollow' : ''}" style="--c:${c.color}"></span><span class="name">${c.name}</span>
+      <span class="count">${events.filter((e) => e.cal === c.id && e.date >= ws && e.date < add(ws, 7)).length}</span></button>`;
+  }).join('');
+  return `<aside class="side">
+    <div class="brand"><span class="brand-mark">${svg('mark')}</span><b>Ocal</b><span class="demo">DEMO</span></div>
+    <button class="compose" data-act="new" data-tip="New event">${svg('plus')}New event<kbd>c</kbd></button>
+    <div class="side-scroll">
+      <div class="mini">
+        <div class="mini-head"><b>${MOL[mon(ms)]} ${year(ms)}</b>
+          <button class="icon-btn" data-act="mini-prev" data-tip="Previous month">${svg('left')}</button>
+          <button class="icon-btn" data-act="mini-next" data-tip="Next month">${svg('right')}</button></div>
+        <div class="mini-grid">${WD.map((w) => `<div class="mini-wd">${w.slice(0, 2)}</div>`).join('')}${days}</div>
+      </div>
+      ${now}
+      ${next ? `<div class="section">Up next</div><nav class="nav">${next}</nav>` : ''}
+      <div class="section">Calendars</div>
+      <div class="tabs sets">${SETS.map((s) => `<button class="${S.set === s.id ? 'on' : ''}" data-set="${s.id}">${s.name}</button>`).join('')}</div>
+      <nav class="nav">${cals}</nav>
+    </div>
+    <div class="side-foot">
+      <span class="pulse"></span><span>Synced just now</span>
+      <button class="icon-btn" data-act="theme" data-tip="Toggle light">${svg('sun')}</button>
+      <button class="icon-btn" data-tip="Settings">${svg('gear')}</button>
+    </div>
+  </aside>`;
+}
+
+// ── Toolbar ──
+function toolbar() {
+  let title, yr = year(S.date), sub = '';
+  if (S.view === 'day') {
+    title = `${WDL[dow(S.date)]} ${dom(S.date)} ${MOL[mon(S.date)]}`;
+    sub = relDay(S.date) || '';
+  } else if (S.view === 'week') {
+    const a = weekStart(S.date), b = add(a, 6);
+    title = mon(a) === mon(b) ? MOL[mon(a)] : `${MO[mon(a)]} – ${MO[mon(b)]}`;
+    yr = year(b);
+    sub = `Week ${isoWeek(add(a, 1))}`;
+  } else if (S.view === 'tasks') {
+    title = 'Tasks'; yr = '';
+    sub = `${events.filter((e) => e.task && !e.done && visible(e)).length} to do`;
+  } else {
+    title = MOL[mon(S.date)];
+  }
+  const views = [['day', 'Day', '1'], ['week', 'Week', '2'], ['month', 'Month', '3'], ['agenda', 'Agenda', '4'], ['tasks', 'Tasks', '5']];
+  const atToday = S.view === 'tasks' || (S.view === 'week' ? weekStart(S.date) === weekStart(TODAY) : S.view === 'month' ? monthStart(S.date) === monthStart(TODAY) : S.date === TODAY);
+  return `<div class="bar">
+    <button class="icon-btn" data-act="side" data-tip="Sidebar · b">${svg('side')}</button>
+    <h1>${title} <em>${yr}</em></h1><span class="sub">${sub}</span>
+    <span class="sep" style="margin-left:14px"></span>
+    <button class="icon-btn" data-act="prev" data-tip="Previous · [">${svg('left')}</button>
+    <button class="today ${atToday ? 'on' : ''}" data-act="today" data-tip="Today · t">Today</button>
+    <button class="icon-btn" data-act="next" data-tip="Next · ]">${svg('right')}</button>
+    <span class="grow"></span>
+    <div class="tabs">${views.map(([v, l, k]) => `<button class="${S.view === v ? 'on' : ''}" data-view="${v}" data-tip="${l} · ${k}">${l}</button>`).join('')}</div>
+    <span class="sep"></span>
+    <label class="search">${svg('search')}<input id="q" placeholder="Search events" autocomplete="off" value="${S.q}"><kbd>/</kbd></label>
+    <button class="icon-btn" data-act="sync" data-tip="Sync · Ctrl+R" style="margin-left:6px">${svg('sync')}</button>
+    <button class="icon-btn" data-tip="More">${svg('more')}</button>
+  </div>`;
+}
+
+// ── Day / week time grid ──
+function layoutDay(list) {
+  // Greedy columns within clusters of overlapping events.
+  const out = [];
+  let cluster = [], end = -1;
+  const flush = () => {
+    const cols = [];
+    for (const e of cluster) {
+      let i = cols.findIndex((c) => c <= e.start);
+      if (i < 0) { i = cols.length; cols.push(0); }
+      cols[i] = e.end;
+      out.push({ e, col: i });
+    }
+    out.slice(-cluster.length).forEach((o) => (o.n = cols.length));
+    cluster = [];
+  };
+  for (const e of list) {
+    if (e.start >= end && cluster.length) flush();
+    cluster.push(e);
+    end = Math.max(end, e.end);
+  }
+  if (cluster.length) flush();
+  return out;
+}
+function block({ e, col, n }) {
+  const top = (e.start / 60) * 52, h = Math.max(((e.end - e.start) / 60) * 52 - 2, 20);
+  // Earlier overlapping events keep extra width so their titles stay readable.
+  const w = 100 / n, span = col === n - 1 ? w : Math.min(100 - col * w, w * 1.7), short = e.end - e.start <= 30;
+  const cls = ['ev', short && 'short', isPast(e) && 'past', isSel(e) && 'sel'].filter(Boolean).join(' ');
+  const body = short
+    ? `<div class="t">${e.title}</div><div class="s">${hm(e.start)}</div>`
+    : `<div class="t">${e.title}</div><div class="s">${hm(e.start)} – ${hm(e.end)}</div>${h > 64 && e.loc ? `<div class="s">${e.loc}</div>` : ''}`;
+  return `<div class="${cls}" style="--c:${cal(e.cal).color};top:${top + 1}px;height:${h}px;left:calc(${col * w}% + 3px);width:calc(${span}% - 6px);z-index:${col + 1}" data-ev="${e.id}">${body}</div>`;
+}
+function timeGrid(days) {
+  const n = days.length;
+  const head = days.map((d) => `<div class="dh ${d === TODAY ? 'today' : ''} ${[0, 6].includes(dow(d)) ? 'weekend' : ''}" data-day="${d}">
+      <span class="wd">${WD[dow(d)]}</span><span class="n">${dom(d)}</span></div>`).join('');
+  const allDay = days.map((d) => on(d).filter((e) => e.allDay || e.task));
+  const allRow = allDay.some((l) => l.length) ? `<div class="cols allday" style="--n:${n}"><div class="lab">all-day</div>${allDay.map((l) => `<div class="cell">${l.map((e) =>
+    `<div class="pill ${e.task ? 'is-task' : ''} ${isSel(e) ? 'sel' : ''}" style="--c:${cal(e.cal).color}" data-ev="${e.id}">${e.task ? checkbox(e) : ''}<span class="ell">${e.title}</span></div>`).join('')}</div>`).join('')}</div>` : '';
+  let labels = '';
+  for (let h = 1; h < 24; h++) {
+    if (days.includes(TODAY) && Math.abs(h * 60 - NOW) < 14) continue;
+    labels += `<div class="hl" style="top:${h * 52}px">${hm(h * 60)}</div>`;
+  }
+  const cols = days.map((d) => {
+    const cls = ['col', d === TODAY && 'today', [0, 6].includes(dow(d)) && 'weekend'].filter(Boolean).join(' ');
+    const c = S.composer;
+    const ghost = c && c.date === d ? `<div class="ghost" style="top:${(c.start / 60) * 52 + 1}px;height:${Math.max(((c.end - c.start) / 60) * 52 - 2, 20)}px">${c.title || 'New event'} · ${hm(c.start)} – ${hm(c.end)}</div>` : '';
+    return `<div class="${cls}" data-col="${d}"><div class="offhours" style="top:0;height:${8 * 52}px"></div><div class="offhours" style="top:${18 * 52}px;bottom:0"></div>
+      ${layoutDay(timed(d)).map(block).join('')}${ghost}</div>`;
+  }).join('');
+  const ti = days.indexOf(TODAY), y = (NOW / 60) * 52;
+  const now = ti < 0 ? '' : `<div class="nowline" style="top:${y}px"></div>
+    <div class="nowseg" style="top:${y}px;left:calc(58px + (100% - 68px) * ${ti / n});width:calc((100% - 68px) / ${n})"></div>
+    <div class="nowpill" style="top:${y}px">${hm(NOW)}</div>`;
+  return `<div class="cols" style="--n:${n}"><div></div>${head}</div>${allRow}
+    <div class="scroll" id="scroll"><div class="grid"><div class="cols" style="--n:${n}"><div class="gutter">${labels}</div>${cols}</div>${now}</div></div>`;
+}
+
+// ── Month ──
+function month() {
+  const ms = monthStart(S.date), first = weekStart(ms);
+  let cells = '';
+  for (let i = 0; i < 42; i++) {
+    const d = add(first, i), list = on(d).sort(byTime), max = list.length > 4 ? 3 : 4;
+    const cls = ['mc', mon(d) !== mon(ms) && 'out', d === TODAY && 'today', d === S.date && 'sel', [0, 6].includes(dow(d)) && 'weekend'].filter(Boolean).join(' ');
+    const rows = list.slice(0, max).map((e) => {
+      const c = cal(e.cal).color;
+      if (e.allDay || e.task) return `<div class="pill ${e.task ? 'is-task' : ''} ${isSel(e) ? 'sel' : ''}" style="--c:${c};height:20px;margin-bottom:1px" data-ev="${e.id}">${e.task ? checkbox(e) : ''}<span class="ell">${e.title}</span></div>`;
+      return `<div class="me ${isSel(e) ? 'sel' : ''} ${isPast(e) ? 'past' : ''}" style="--c:${c}" data-ev="${e.id}"><span class="dot"></span><span class="ell">${e.title}</span><span class="tm">${hm(e.start)}</span></div>`;
+    }).join('');
+    cells += `<div class="${cls}"><span class="mn" data-day="${d}">${dom(d) === 1 ? `${dom(d)} ${MO[mon(d)]}` : dom(d)}</span>${rows}${list.length > max ? `<div class="more" data-day="${d}">${list.length - max} more</div>` : ''}</div>`;
+  }
+  return `<div class="month"><div class="mhead">${WD.map((w) => `<div>${w}</div>`).join('')}</div><div class="mgrid">${cells}</div></div>`;
+}
+
+// ── Agenda ──
+function agenda() {
+  let html = '';
+  for (let i = 0; i < 21; i++) {
+    const d = add(S.date, i), list = on(d).sort(byTime);
+    if (!list.length) continue;
+    html += `<div class="day-h ${d === TODAY ? 'today' : ''}"><b>${relDay(d) || WDL[dow(d)]}</b><span>${dom(d)} ${MOL[mon(d)]}</span></div>`;
+    for (const e of list) {
+      const time = e.task ? 'Task' : e.allDay ? 'All day' : `${hm(e.start)}<small>${dur(e.end - e.start)}</small>`;
+      const sub = [e.loc && `${svg('pin')}${e.loc}`, e.link && `${svg('video')}Google Meet`].filter(Boolean).join('<span>·</span>');
+      html += `<div class="ag ${isSel(e) ? 'sel' : ''} ${isPast(e) ? 'past' : ''}" style="--c:${cal(e.cal).color}" data-ev="${e.id}">
+        <div class="tm">${time}</div><div class="bar3"></div>
+        <div class="ell"><div class="t ell">${e.title}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>
+        <span class="chip" style="--c:${cal(e.cal).color}">${cal(e.cal).name}</span></div>`;
+    }
+  }
+  return `<div class="list"><div class="list-in">${html || '<div class="empty">Nothing scheduled.<br><small>Press c to add an event.</small></div>'}</div></div>`;
+}
+
+// ── Tasks ──
+function tasks() {
+  const list = events.filter((e) => e.task && visible(e)).sort((a, b) => a.done - b.done || a.date.localeCompare(b.date));
+  const row = (e) => `<div class="task ${e.done ? 'done' : ''}" style="--c:${cal(e.cal).color}" data-ev="${e.id}">
+    ${checkbox(e)}<span class="t">${e.title}</span><span class="due ${e.date === TODAY ? 'today' : ''}">${relDay(e.date) || shortDate(e.date)}</span></div>`;
+  const todo = list.filter((e) => !e.done), done = list.filter((e) => e.done);
+  return `<div class="list"><div class="list-in">
+    <div class="day-h"><b>To do</b><span>${todo.length}</span></div>${todo.map(row).join('')}
+    ${done.length ? `<div class="day-h"><b>Completed</b><span>${done.length}</span></div>${done.map(row).join('')}` : ''}
+  </div></div>`;
+}
+
+// ── Event details ──
+function details(e) {
+  const c = cal(e.cal);
+  const when = e.task ? `Due <b>${relDay(e.date) || longDate(e.date)}</b>`
+    : e.allDay ? `<b>${longDate(e.date)}</b> · All day`
+    : `<b>${longDate(e.date)}</b><br>${hm(e.start)} – ${hm(e.end)} · ${dur(e.end - e.start)}`;
+  const rows = [
+    e.link && `<div class="row">${svg('video')}<span>Google Meet<small>${e.link}</small></span><button class="send" data-tip="Join meeting">Join</button></div>`,
+    e.loc && `<div class="row">${svg('pin')}<span>${e.loc}</span></div>`,
+    e.guests && `<div class="row">${svg('users')}<span>${e.guests} guests<small>3 accepted · 1 awaiting</small></span></div>`,
+    e.notes && `<div class="row">${svg('notes')}<span>${e.notes}</span></div>`,
+  ].filter(Boolean).join('');
+  return `<div class="card pop" id="pop">
+    <div class="pop-top"><span class="chip" style="--c:${c.color}">${c.name}</span>${isPast(e) && !e.task ? '<span>Ended</span>' : ''}<span class="grow"></span>
+      <button class="icon-btn" data-tip="More">${svg('more')}</button><button class="icon-btn" data-act="close" data-tip="Close · Esc">${svg('x')}</button></div>
+    <h2>${e.title}</h2>
+    <div class="meta">${when}</div>
+    ${rows ? `<div class="rows">${rows}</div>` : '<div style="height:10px"></div>'}
+    <div class="foot modes">
+      <button data-tip="Edit · Enter">${svg('edit')}Edit</button>
+      <button data-tip="Duplicate">${svg('copy')}Duplicate</button>
+      <span class="grow"></span>
+      <button class="danger" data-act="delete" data-tip="Delete · Del">${svg('trash')}</button>
+    </div>
+  </div>`;
+}
+
+// ── New-event composer ──
+function composer(c) {
+  return `<div class="card comp" id="comp">
+    <input class="comp-title" id="ctitle" placeholder="New event" autocomplete="off" value="${c.title}">
+    <div class="fields">
+      <div class="field">${svg('clock')}
+        <span class="tchip">${shortDate(c.date)}</span>
+        <span class="tchip"><input id="cstart" value="${hm(c.start)}"></span><span class="hint">to</span>
+        <span class="tchip"><input id="cend" value="${hm(c.end)}"></span><span class="hint">${dur(c.end - c.start)}</span>
+      </div>
+      <div class="field">${svg('cal')}<div class="tabs">${CALS.filter((x) => x.id !== 'tasks').map((x) =>
+        `<button class="${c.cal === x.id ? 'on' : ''}" data-ccal="${x.id}"><span class="dot" style="--c:${x.color}"></span>${x.name}</button>`).join('')}</div></div>
+      <div class="field">${svg('pin')}<input id="cloc" placeholder="Add a location" value="${c.loc}"></div>
+      <div class="field">${svg('video')}<div class="tabs">${[['none', 'No meeting'], ['link', 'Paste a link'], ['meet', 'Google Meet']].map(([k, l]) =>
+        `<button class="${c.meet === k ? 'on' : ''}" data-meet="${k}">${l}</button>`).join('')}</div></div>
+    </div>
+    <div class="foot modes">
+      <button>${svg('notes')}More details</button>
+      <span class="grow"></span>
+      <button data-act="cancel">Cancel</button>
+      <button class="send ${c.title.trim() ? '' : 'idle'}" id="save" data-act="save" style="margin-left:4px">Save <kbd>Ctrl ↵</kbd></button>
+    </div>
+  </div>`;
+}
+
+function keysCard() {
+  const rows = [['New event', ['c']], ['Today', ['t']], ['Previous / next', ['[', ']']], ['Day · week · month', ['1', '2', '3']], ['Agenda · tasks', ['4', '5']], ['Search', ['/']], ['Sidebar', ['b']], ['Close', ['Esc']]];
+  return `<div class="card keys">${rows.map(([l, k]) => `<div class="k"><span>${l}</span><span>${k.map((x) => `<kbd>${x}</kbd>`).join('')}</span></div>`).join('')}</div>`;
+}
+
+// ── Render ──
+const app = $('app');
+function render() {
+  const sc = $('scroll');
+  if (sc) S.scrollTop = sc.scrollTop;
+  const typing = document.activeElement && document.activeElement.id === 'q';
+  let body;
+  if (S.view === 'week') { const a = weekStart(S.date); body = timeGrid([...Array(7)].map((_, i) => add(a, i))); }
+  else if (S.view === 'day') body = timeGrid([S.date]);
+  else if (S.view === 'month') body = month();
+  else if (S.view === 'agenda') body = agenda();
+  else body = tasks();
+  const e = events.find((x) => x.id === S.sel);
+  app.innerHTML = `${sidebar()}<main class="sheet">${toolbar()}<div class="view">${body}</div></main>
+    ${e ? details(e) : ''}${S.composer ? composer(S.composer) : ''}${S.keys ? keysCard() : ''}
+    <div class="toast" id="toast"><span id="toast-msg"></span><button id="undo">Undo</button></div>`;
+  const ns = $('scroll');
+  if (ns) ns.scrollTop = S.scrollTop ?? 7.4 * 52;
+  if (typing) { const q = $('q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  placePopover();
+  if (toast.msg) showToast();
+}
+function rel(el) {
+  const a = app.getBoundingClientRect(), r = el.getBoundingClientRect(), z = scale();
+  return { left: (r.left - a.left) / z, top: (r.top - a.top) / z, right: (r.right - a.left) / z };
+}
+function placePopover() {
+  const pop = $('pop');
+  if (!pop) return;
+  const anchor = app.querySelector(`.sheet [data-ev="${S.sel}"]`) || app.querySelector(`[data-ev="${S.sel}"]`);
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = 1440 - pw - 24, top = 72;
+  if (anchor) {
+    const r = rel(anchor);
+    left = r.right + 10 + pw < 1440 - 12 ? r.right + 10 : r.left - 10 - pw;
+    top = Math.min(Math.max(r.top - 8, 64), 900 - ph - 16);
+  }
+  pop.style.left = `${Math.max(left, 12)}px`;
+  pop.style.top = `${top}px`;
+}
+
+// ── Toast with undo, like Omail ──
+function toast(msg, undo) {
+  toast.msg = msg; toast.undo = undo;
+  showToast();
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { toast.msg = null; $('toast').classList.remove('show'); }, 4000);
+}
+function showToast() {
+  $('toast-msg').textContent = toast.msg;
+  $('undo').style.display = toast.undo ? '' : 'none';
+  $('toast').classList.add('show');
+}
+
+// ── Interaction ──
+function setView(v) { S.view = v; S.sel = null; render(); }
+function shift(n) {
+  if (S.view === 'day') S.date = add(S.date, n);
+  else if (S.view === 'week' || S.view === 'agenda') S.date = add(S.date, 7 * n);
+  else if (S.view === 'month') S.date = addMonths(S.date, n);
+  S.sel = null; S.scrollTop = null; render();
+}
+function goToday() { S.date = TODAY; S.sel = null; S.scrollTop = null; render(); }
+function openComposer(date, start) {
+  S.sel = null; S.keys = false;
+  S.composer = { date, start, end: Math.min(start + 60, 24 * 60 - 1), title: '', cal: 'work', loc: '', meet: 'none' };
+  if (S.view !== 'day' && S.view !== 'week') S.view = 'week';
+  S.date = date;
+  render();
+  $('ctitle').focus();
+}
+function readComposer() {
+  const c = S.composer;
+  c.title = $('ctitle').value;
+  c.loc = $('cloc').value;
+  c.start = parseHm($('cstart').value) ?? c.start;
+  c.end = parseHm($('cend').value) ?? c.end;
+  if (c.end <= c.start) c.end = c.start + 30;
+}
+function save() {
+  readComposer();
+  const c = S.composer;
+  if (!c.title.trim()) { $('ctitle').focus(); return; }
+  const e = { id: nextId++, date: c.date, start: c.start, end: c.end, title: c.title.trim(), cal: c.cal, loc: c.loc.trim(), link: c.meet === 'meet' ? 'meet.google.com/new-meet-ing' : '', notes: '' };
+  events.push(e);
+  S.composer = null; S.sel = e.id;
+  render();
+  toast(`Saved to ${cal(e.cal).name}`);
+}
+
+app.addEventListener('click', (ev) => {
+  if (ev.target.id === 'undo') {
+    if (S.removed) { events.push(S.removed); S.sel = S.removed.id; S.removed = null; }
+    toast.msg = null; render(); $('toast').classList.remove('show');
+    return;
+  }
+  const t = ev.target.closest('[data-act],[data-view],[data-ev],[data-go],[data-day],[data-cal],[data-set],[data-done],[data-ccal],[data-meet]');
+  if (!t) {
+    if (!ev.target.closest('.card') && (S.sel || S.keys)) { S.sel = null; S.keys = false; render(); }
+    return;
+  }
+  const d = t.dataset;
+  if (d.done) { const e = events.find((x) => x.id === +d.done); e.done = !e.done; render(); if (e.done) toast(`Completed “${e.title}”`); return; }
+  if (d.ccal || d.meet) { readComposer(); if (d.ccal) S.composer.cal = d.ccal; else S.composer.meet = d.meet; render(); return; }
+  if (d.view) return setView(d.view);
+  if (d.ev) { S.sel = S.sel === +d.ev ? null : +d.ev; S.composer = null; S.keys = false; return render(); }
+  if (d.go) { S.date = d.go; S.sel = null; S.scrollTop = null; return render(); }
+  if (d.day) { S.date = d.day; S.view = 'day'; S.sel = null; return render(); }
+  if (d.cal) { S.hidden.has(d.cal) ? S.hidden.delete(d.cal) : S.hidden.add(d.cal); return render(); }
+  if (d.set) { S.set = d.set; return render(); }
+  switch (d.act) {
+    case 'prev': return shift(-1);
+    case 'next': return shift(1);
+    case 'today': return goToday();
+    case 'mini-prev': S.date = addMonths(S.date, -1); return render();
+    case 'mini-next': S.date = addMonths(S.date, 1); return render();
+    case 'new': return openComposer(S.date, S.date === TODAY ? Math.ceil(NOW / 30) * 30 : 9 * 60);
+    case 'close': S.sel = null; return render();
+    case 'cancel': S.composer = null; return render();
+    case 'save': return save();
+    case 'keys': S.keys = !S.keys; return render();
+    case 'side': app.classList.toggle('collapsed'); return setTimeout(placePopover, 220);
+    case 'theme': app.classList.toggle('light'); return syncTipColors();
+    case 'sync': return toast('Synced just now');
+    case 'delete': {
+      const e = events.find((x) => x.id === S.sel);
+      events = events.filter((x) => x !== e); S.removed = e; S.sel = null; render();
+      return toast(`Deleted “${e.title}”`, true);
+    }
+  }
+});
+app.addEventListener('dblclick', (ev) => {
+  const col = ev.target.closest('[data-col]');
+  if (!col || ev.target.closest('[data-ev]')) return;
+  const y = (ev.clientY - col.getBoundingClientRect().top) / scale();
+  openComposer(col.dataset.col, Math.min(Math.floor(y / 26) * 30, 23 * 60));
+});
+app.addEventListener('input', (ev) => {
+  if (ev.target.id === 'q') { S.q = ev.target.value; render(); }
+  if (ev.target.id === 'ctitle' && S.composer) {
+    S.composer.title = ev.target.value;
+    $('save').classList.toggle('idle', !ev.target.value.trim());
+    const g = app.querySelector('.ghost');
+    if (g) g.textContent = `${S.composer.title || 'New event'} · ${hm(S.composer.start)} – ${hm(S.composer.end)}`;
+  }
+});
+document.addEventListener('keydown', (ev) => {
+  const typing = ev.target.tagName === 'INPUT';
+  const k = ev.key;
+  if (k === 'Escape') {
+    if (typing) ev.target.blur();
+    if (S.composer) S.composer = null; else if (S.sel) S.sel = null; else if (S.keys) S.keys = false; else if (S.q) S.q = '';
+    return render();
+  }
+  if (k === 'Enter' && ev.ctrlKey && S.composer) return save();
+  if (typing || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const views = { 1: 'day', 2: 'week', 3: 'month', 4: 'agenda', 5: 'tasks' };
+  if (views[k]) setView(views[k]);
+  else if (k === '[') shift(-1);
+  else if (k === ']') shift(1);
+  else if (k === 't') goToday();
+  else if (k === 'b') { app.classList.toggle('collapsed'); setTimeout(placePopover, 220); }
+  else if (k === 'c') { ev.preventDefault(); openComposer(S.date, S.date === TODAY ? Math.ceil(NOW / 30) * 30 : 9 * 60); }
+  else if (k === '?') { S.keys = !S.keys; render(); }
+  else if (k === '/') { ev.preventDefault(); $('q').focus(); }
+  else if ((k === 'Delete' || k === 'Backspace') && S.sel) app.querySelector('[data-act="delete"]')?.click();
+});
+
+// Tooltips, matching the app's "Label · key" format.
+function syncTipColors() {
+  const cs = getComputedStyle(app);
+  $('tip').style.setProperty('--tip-bg', cs.getPropertyValue('--bright'));
+  $('tip').style.setProperty('--tip-fg', cs.getPropertyValue('--background'));
+}
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip]'), tip = $('tip');
+  if (!el) { tip.style.opacity = 0; return; }
+  tip.textContent = el.dataset.tip;
+  const r = el.getBoundingClientRect();
+  tip.style.left = `${Math.max(4, r.left + r.width / 2 - tip.offsetWidth / 2)}px`;
+  tip.style.top = `${r.bottom + 6}px`;
+  tip.style.opacity = 1;
+});
+
+// Fit the 1440 × 900 window to the page width.
+const scale = () => Math.min(1, document.documentElement.clientWidth / 1440);
+function fit() {
+  const z = scale();
+  $('stage').style.transform = `scale(${z})`;
+  document.body.style.height = `${900 * z}px`;
+  document.body.style.overflow = 'hidden';
+}
+addEventListener('resize', fit); fit();
+
+// Screenshot hooks: #view, ?select=<title>, ?compose=1, ?light=1, ?collapsed=1, ?keys=1, ?q=<search>, ?hide=<calendar ids>, ?set=<set id>, ?toast=<message>.
+const P = new URLSearchParams(location.search);
+const hash = location.hash.slice(1);
+if (['day', 'week', 'month', 'agenda', 'tasks'].includes(hash)) S.view = hash;
+if (P.get('light')) app.classList.add('light');
+if (P.get('collapsed')) app.classList.add('collapsed');
+if (P.get('keys')) S.keys = true;
+if (P.get('q')) S.q = P.get('q');
+if (P.get('hide')) P.get('hide').split(',').forEach((c) => S.hidden.add(c));
+if (P.get('set')) S.set = P.get('set');
+if (P.get('select')) S.sel = (events.find((e) => e.title === P.get('select') && e.date >= weekStart(TODAY)) || {}).id ?? null;
+syncTipColors();
+if (P.get('compose')) { openComposer(TODAY, 11 * 60); S.composer.title = 'Design sync'; S.composer.meet = 'meet'; render(); }
+else render();
+if (P.get('toast')) toast(P.get('toast'), true);
+</script>
+</body>
+</html>
