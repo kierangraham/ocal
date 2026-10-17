@@ -10,7 +10,10 @@ mod sidebar;
 mod tests;
 
 use crate::{
-    appearance::{action_button, day_number, event_text, reveal_field, tint, tool_button},
+    appearance::{
+        RADIUS_SHEET, action_button, card_shadow, day_number, event_text, reveal_field,
+        sheet_shadow, tint, tool_button,
+    },
     menus::{ContextTarget, menu},
     worker::{Command, Event as WorkerEvent, Worker},
 };
@@ -142,9 +145,13 @@ const HOUR: f32 = 3.2;
 const NARROW: f32 = 920.;
 /// From this width the search field stays open in the header.
 const WIDE: f32 = 1100.;
-const SIDEBAR: f32 = 15.;
-const HEADER: f32 = 2.7;
-const STATUS: f32 = 1.8;
+const SIDEBAR: f32 = 14.5;
+/// The content sheet's margin from the window edges.
+const SHEET_GAP: f32 = 0.5;
+const TOOLBAR: f32 = 3.5;
+/// Docked panels start below the sheet's toolbar.
+const HEADER: f32 = SHEET_GAP + TOOLBAR;
+const STATUS: f32 = 1.7;
 /// IANA zones for pickers: `lead` first, then every regional zone, then UTC.
 fn zone_names(lead: &[String]) -> Vec<String> {
     let mut zones = lead.to_vec();
@@ -233,7 +240,7 @@ pub struct Ocal {
 }
 impl Ocal {
     pub fn new(worker: Worker, demo: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search events · /"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search events"));
         let set_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Name this calendar set"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify())
@@ -358,6 +365,21 @@ impl Ocal {
                         Ok("settings") => self.settings = true,
                         Ok("help") => self.help = true,
                         _ => (),
+                    }
+                    static VIEW: AtomicBool = AtomicBool::new(false);
+                    if let Some(view) = std::env::var("OCAL_DEBUG_VIEW")
+                        .ok()
+                        .and_then(|v| View::parse(&v))
+                        && !VIEW.swap(true, Ordering::Relaxed)
+                    {
+                        self.set_view(view);
+                    }
+                    // Zooming in stands in for a narrower window in fixed-size captures.
+                    if let Some(zoom) = std::env::var("OCAL_DEBUG_ZOOM")
+                        .ok()
+                        .and_then(|z| z.parse::<f32>().ok())
+                    {
+                        self.zoom = zoom.clamp(0.7, 1.8);
                     }
                 }
                 if self.status == "Saved · Generating Google Meet…"
@@ -865,14 +887,39 @@ impl Render for Ocal {
                 View::Tasks => self.tasks(cx),
             }
         };
+        let docked = layout.sidebar && !self.sidebar_hidden;
+        let gap = rems(SHEET_GAP);
+        // The calendar sits on a raised, rounded sheet; the sidebar and status line
+        // stay on the inset window background around it.
+        let sheet = div()
+            .debug_selector(|| "sheet".into())
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .mt(gap)
+            .mr(gap)
+            .when(!docked, |s| s.ml(gap))
+            .rounded(RADIUS_SHEET)
+            .overflow_hidden()
+            .bg(t.background)
+            .shadow(sheet_shadow(&t))
+            .child(self.toolbar(layout, window, cx))
+            .child(div().flex_1().min_h_0().flex().flex_col().child(content));
         let body = div()
             .flex_1()
             .min_h_0()
             .flex()
-            .children((layout.sidebar && !self.sidebar_hidden).then(|| self.sidebar(cx)))
-            .child(div().flex_1().min_w_0().flex().flex_col().child(content));
-        let header = self.header(layout, window, cx);
-        let status = self.status_bar(layout, cursor_event.as_ref(), cx);
+            .children(docked.then(|| self.sidebar(false, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(sheet)
+                    .child(self.status_bar(layout, cursor_event.as_ref(), cx)),
+            );
         let mut root = focus_scope("ocal")
             .track_focus(&self.focus)
             .key_context("Ocal OmarchyFocusScope")
@@ -880,7 +927,7 @@ impl Render for Ocal {
             .relative()
             .flex()
             .flex_col()
-            .bg(t.background)
+            .bg(t.inset)
             .text_color(t.foreground)
             .font_family(t.font.clone())
             .text_size(rems(0.8))
@@ -1012,19 +1059,18 @@ impl Render for Ocal {
                     cx.notify();
                 }),
             )
-            .child(header)
-            .child(body)
-            .child(status);
+            .child(body);
         if !layout.sidebar && self.sidebar_open {
             root = root.child(
                 div()
                     .absolute()
                     .left_0()
-                    .top(rems(HEADER))
-                    .bottom(rems(STATUS))
+                    .top_0()
+                    .bottom_0()
                     .occlude()
-                    .shadow_lg()
-                    .child(self.sidebar(cx)),
+                    .bg(t.inset)
+                    .shadow(card_shadow(&t))
+                    .child(self.sidebar(true, cx)),
             );
         }
         if self.selected.is_some() {

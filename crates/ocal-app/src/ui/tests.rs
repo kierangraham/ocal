@@ -1,4 +1,5 @@
 use super::{sidebar::calendar_groups, *};
+use crate::appearance::tip_text;
 use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, size};
 
 fn fixture(
@@ -704,8 +705,11 @@ fn calendar_columns_fill_the_available_area(cx: &mut TestAppContext) {
     let (view, cx, _commands) = fixture(cx);
     let left = cx.debug_bounds("grid-day-0").unwrap();
     let right = cx.debug_bounds("grid-day-6").unwrap();
+    let sheet = cx.debug_bounds("sheet").unwrap();
     assert!(left.size.width > px(150.));
-    assert!((right.right() - px(1440.)).abs() < px(2.));
+    // The sheet sits 8 px in from the window edge, and the grid fills it.
+    assert!((sheet.right() - px(1432.)).abs() < px(1.));
+    assert!((right.right() - sheet.right()).abs() < px(2.));
     assert!(view.read_with(cx, |app, _| app.grid_scroll.offset().y < px(-300.)));
     cx.simulate_keystrokes("3");
     draw(cx);
@@ -714,8 +718,8 @@ fn calendar_columns_fill_the_available_area(cx: &mut TestAppContext) {
     let first = cx.debug_bounds("month-day-0").unwrap();
     let last = cx.debug_bounds("month-day-41").unwrap();
     assert!(first.size.width > px(150.) && first.size.height > px(100.));
-    assert!((last.right() - px(1440.)).abs() < px(2.));
-    assert!(last.bottom() > px(890.) && last.bottom() <= px(940.));
+    assert!((last.right() - sheet.right()).abs() < px(2.));
+    assert!(last.bottom() > px(890.) && last.bottom() <= sheet.bottom() + px(1.));
 }
 
 #[gpui_kit::test]
@@ -739,7 +743,7 @@ fn half_width_tiles_keep_the_week_and_view_buttons(cx: &mut TestAppContext) {
     cx.simulate_resize(size(px(850.), px(1040.)));
     draw(cx);
     assert!(cx.debug_bounds("grid-day-6").is_some());
-    assert!(cx.debug_bounds("tool-Calendars").is_some());
+    assert!(cx.debug_bounds("tool-Show sidebar").is_some());
     let right = cx.debug_bounds("grid-day-6").unwrap();
     assert!(right.right() <= px(851.));
     cx.simulate_resize(size(px(600.), px(800.)));
@@ -1159,4 +1163,112 @@ fn settings_and_help_pages_render_and_return_to_the_calendar(cx: &mut TestAppCon
     let close = cx.debug_bounds("close-help").unwrap().center();
     cx.simulate_click(close, Default::default());
     assert!(view.read_with(cx, |app, _| !app.help));
+}
+
+#[gpui_kit::test]
+fn the_sidebar_owns_new_event_until_it_is_hidden(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    let sheet = cx.debug_bounds("sheet").unwrap();
+    assert!(cx.debug_bounds("demo-badge").is_some());
+    // No header row: the sheet starts 8 px below the window top, beside the sidebar.
+    assert!((sheet.top() - px(8.)).abs() < px(1.));
+    assert!(sheet.left() >= sidebar.right());
+    assert!(cx.debug_bounds("tool-New event").is_none());
+    let new = cx.debug_bounds("new-event").unwrap();
+    assert!(new.right() <= sidebar.right());
+    cx.simulate_click(new.center(), Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.editor.is_some()));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    // Hiding the sidebar puts the toolbar's + back and lets the sheet take the width.
+    let toggle = cx.debug_bounds("tool-Hide sidebar").unwrap().center();
+    cx.simulate_click(toggle, Default::default());
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar").is_none());
+    assert!((cx.debug_bounds("sheet").unwrap().left() - px(8.)).abs() < px(1.));
+    let plus = cx.debug_bounds("tool-New event").unwrap().center();
+    cx.simulate_click(plus, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.editor.is_some()));
+}
+
+#[gpui_kit::test]
+fn narrow_windows_overlay_the_sidebar_with_its_own_close_button(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    cx.simulate_resize(size(px(480.), px(800.)));
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar").is_none());
+    assert!(cx.debug_bounds("tool-New event").is_some());
+    // Every toolbar control stays inside the sheet.
+    let sheet = cx.debug_bounds("sheet").unwrap();
+    let menu = cx.debug_bounds("tool-Calendar options").unwrap();
+    assert!(menu.right() <= sheet.right());
+    // Compact windows keep the view menu instead of the pill tabs.
+    assert!(cx.debug_bounds("view-0").is_none());
+    let open = cx.debug_bounds("tool-Show sidebar").unwrap().center();
+    cx.simulate_click(open, Default::default());
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar").is_some());
+    assert!(cx.debug_bounds("new-event").is_some());
+    let close = cx.debug_bounds("tool-Hide sidebar").unwrap().center();
+    cx.simulate_click(close, Default::default());
+    draw(cx);
+    assert!(cx.debug_bounds("sidebar").is_none());
+    assert!(view.read_with(cx, |app, _| !app.sidebar_open && !app.sidebar_hidden));
+}
+
+#[gpui_kit::test]
+fn the_toolbar_notes_the_week_and_dims_today_when_it_is_in_view(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    view.update(cx, |app, _| {
+        // Sunday 4 October starts the week; Monday 5 October is in ISO week 41.
+        assert_eq!(app.period_note().as_deref(), Some("Week 41"));
+        // 2026 has 53 ISO weeks; the week of Sunday 27 December is the last.
+        app.date = NaiveDate::from_ymd_opt(2027, 1, 2).unwrap();
+        assert_eq!(app.period_note().as_deref(), Some("Week 53"));
+        app.date = app.today();
+        assert!(app.showing_today());
+        app.view = View::Day;
+        assert_eq!(app.period_note().as_deref(), Some("Today"));
+        app.date = app.today() + Duration::days(1);
+        assert_eq!(app.period_note().as_deref(), Some("Tomorrow"));
+        assert!(!app.showing_today());
+        app.date = app.today() + Duration::days(2);
+        assert_eq!(app.period_note(), None);
+        app.view = View::Month;
+        assert_eq!(app.period_note(), None);
+        app.view = View::Tasks;
+        let open = app
+            .snapshot
+            .events
+            .iter()
+            .filter(|e| e.task && !e.completed)
+            .count();
+        assert_eq!(app.period_note(), Some(format!("{open} to do")));
+        assert!(app.showing_today());
+    });
+}
+
+#[gpui_kit::test]
+fn icon_buttons_explain_themselves_with_lower_case_keys(cx: &mut TestAppContext) {
+    let (_view, cx, _commands) = fixture(cx);
+    assert_eq!(
+        tip_text("Sync calendars", "Ctrl R"),
+        "Sync calendars · ctrl r"
+    );
+    assert_eq!(tip_text("Calendar options", ""), "Calendar options");
+    let sync = cx.debug_bounds("tool-Sync calendars").unwrap().center();
+    cx.simulate_event(gpui_kit::MouseMoveEvent {
+        position: sync,
+        pressed_button: None,
+        modifiers: Default::default(),
+    });
+    draw(cx);
+    cx.dispatcher
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    draw(cx);
+    assert!(cx.debug_bounds("tooltip").is_some());
 }

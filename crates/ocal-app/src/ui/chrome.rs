@@ -1,6 +1,8 @@
-//! Header row and status bar.
+//! The sheet's toolbar and the status line.
 use super::*;
-use gpui_omarchy::{keycaps, with_tooltip};
+use crate::appearance::{
+    RADIUS_FIELD, Tones, inset_ring, pill_tab, separator, soft_keycap, tip_text, with_tip,
+};
 
 const VIEWS: [View; 5] = [
     View::Day,
@@ -52,7 +54,46 @@ impl Ocal {
         }
     }
 
-    pub(super) fn header(
+    /// A short note beside the title: the ISO week, "Today", or the open task count.
+    pub(super) fn period_note(&self) -> Option<String> {
+        match self.view {
+            // Weeks start on Sunday; the Monday inside the week names it.
+            View::Week => Some(format!(
+                "Week {}",
+                (week_start(self.date) + Duration::days(1))
+                    .iso_week()
+                    .week()
+            )),
+            View::Day => match (self.date - self.today()).num_days() {
+                0 => Some("Today".into()),
+                1 => Some("Tomorrow".into()),
+                _ => None,
+            },
+            View::Tasks => Some(format!(
+                "{} to do",
+                self.snapshot
+                    .events
+                    .iter()
+                    .filter(|e| e.task && !e.completed && self.visible(&e.calendar))
+                    .count()
+            )),
+            _ => None,
+        }
+    }
+
+    /// Whether the period in view already contains today, so Today would do nothing.
+    pub(super) fn showing_today(&self) -> bool {
+        let today = self.today();
+        match self.view {
+            View::Day | View::Agenda => self.date == today,
+            View::Week => self.visible_days(self.compact).contains(&today),
+            View::Month => (self.date.year(), self.date.month()) == (today.year(), today.month()),
+            View::Tasks => true,
+        }
+    }
+
+    /// The sheet's toolbar: sidebar toggle, period, navigation, views, search and actions.
+    pub(super) fn toolbar(
         &self,
         layout: Layout,
         window: &mut Window,
@@ -61,53 +102,33 @@ impl Ocal {
         let t = cx.omarchy().clone();
         let searching = !self.search.read(cx).value().is_empty() || self.search_open;
         let inline_search = layout.wide || searching;
+        let docked = layout.sidebar && !self.sidebar_hidden;
+        // The sheet's width in rems: below about 58 the toolbar has no room for the
+        // week note beside the title.
+        let sheet = window.viewport_size().width / window.rem_size()
+            - if docked { SIDEBAR } else { 0. }
+            - 2. * SHEET_GAP;
         let (title, mut year) = self.period_title(layout.compact);
+        let title_size = rems(if layout.compact { 1. } else { 1.25 });
         // Narrow windows only name the year when it isn't this one.
         if layout.compact && year == self.today().year().to_string() {
             year.clear();
         }
-        let brand = div()
-            .w(rems(SIDEBAR - 0.6))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(rems(0.55))
-            .child(
-                icon(IconName::CalendarRange)
-                    .size(rems(1.))
-                    .text_color(t.accent),
-            )
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(rems(0.9))
-                    .text_color(t.bright)
-                    .child("Ocal"),
-            )
-            .child(div().flex_1())
-            .child(
-                tool_button(
-                    "hide-sidebar",
-                    IconName::PanelLeft,
-                    "Hide calendars",
-                    "B",
-                    cx,
-                )
-                .on_click(cx.listener(|app, _, window, cx| app.toggle_sidebar(window, cx))),
-            );
         let title = div()
+            .ml(rems(0.25))
             .flex()
             .items_baseline()
             .gap(rems(0.4))
             .min_w_0()
-            .flex_shrink(1.)
+            // The search field gives up its width first; the title is the last resort.
+            .flex_shrink(0.02)
             .overflow_hidden()
             .whitespace_nowrap()
             .debug_selector(|| "period-title".into())
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(rems(1.))
+                    .text_size(title_size)
                     .text_color(t.bright)
                     .text_ellipsis()
                     .child(title),
@@ -115,43 +136,78 @@ impl Ocal {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_size(rems(1.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(title_size)
                     .text_color(t.accent)
                     .child(year),
+            )
+            .children(
+                self.period_note()
+                    .filter(|_| !layout.compact && sheet >= 58.)
+                    .map(|note| {
+                        div()
+                            .flex_shrink_0()
+                            .pl(rems(0.1))
+                            .text_size(rems(0.75))
+                            .text_color(t.muted())
+                            .debug_selector(|| "period-note".into())
+                            .child(note)
+                    }),
             );
+        let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
         let mut search = Some(
             input("search", &self.search, window, cx)
                 .debug_selector(|| "search".into())
-                .w(rems(if layout.wide { 16. } else { 14. }))
+                .prefix(icon(IconName::Search).size(rems(1.)).text_color(t.muted()))
+                .suffix(soft_keycap("/", false, cx))
+                .w(rems(13.75))
                 .min_w(rems(8.))
                 .flex_shrink(1.)
-                .py(rems(0.22))
-                .border_1()
-                .border_color(t.divider())
-                .bg(t.background),
+                .h(rems(2.25))
+                .py(rems(0.))
+                .pl(rems(0.6875))
+                .pr(rems(0.625))
+                .gap(rems(0.5625))
+                .border_0()
+                .rounded(RADIUS_FIELD)
+                .text_size(rems(0.8125))
+                .bg(t.hover())
+                .when(search_focused, |s| s.shadow(inset_ring(t.accent, 1.5))),
         );
         let title_search = searching && !layout.wide;
         div()
-            .h(rems(HEADER))
+            .h(rems(TOOLBAR))
             .flex_shrink_0()
-            .px(rems(0.6))
-            .gap(rems(0.35))
-            .border_b_1()
-            .border_color(t.divider())
-            .bg(t.inset)
+            .pl(rems(if layout.compact { 0.5 } else { 0.75 }))
+            .pr(rems(if layout.compact { 0.5 } else { 0.875 }))
+            .gap(rems(0.125))
             .flex()
             .items_center()
+            .child(
+                tool_button(
+                    "toggle-sidebar",
+                    IconName::PanelLeft,
+                    if docked || self.sidebar_open {
+                        "Hide sidebar"
+                    } else {
+                        "Show sidebar"
+                    },
+                    "b",
+                    cx,
+                )
+                .on_click(cx.listener(|app, _, window, cx| app.toggle_sidebar(window, cx))),
+            )
             .map(|row| {
-                if layout.sidebar && !self.sidebar_hidden {
-                    row.child(brand)
+                // Narrow windows trade the title for the search field while searching.
+                if title_search {
+                    row.children(search.take().map(|s| s.flex_1().ml(rems(0.25))))
                 } else {
-                    row.child(
-                        tool_button("toggle-sidebar", IconName::PanelLeft, "Calendars", "B", cx)
-                            .on_click(
-                                cx.listener(|app, _, window, cx| app.toggle_sidebar(window, cx)),
-                            ),
-                    )
+                    row.child(title)
                 }
+            })
+            // Compact windows need the separators' room for the title.
+            .when(!layout.compact, |row| {
+                row.child(separator(cx).ml(rems(0.875)))
             })
             .child(
                 tool_button(
@@ -164,33 +220,29 @@ impl Ocal {
                 .on_click(cx.listener(|app, _, _, cx| app.navigate(-1, cx))),
             )
             .child(if layout.compact {
-                tool_button("today", IconName::CalendarCheck, "Today", "T", cx)
+                tool_button("today", IconName::CalendarCheck, "Today", "t", cx)
                     .on_click(cx.listener(|app, _, _, cx| app.go_today(cx)))
                     .into_any_element()
             } else {
-                button("today", "Today", ButtonVariant::Secondary, cx)
-                    .h(rems(1.7))
-                    .px(rems(0.6))
-                    .border_1()
-                    .border_color(t.divider())
-                    .bg(t.foreground.opacity(0.))
-                    .on_click(cx.listener(|app, _, _, cx| app.go_today(cx)))
-                    .into_any_element()
+                let current = self.showing_today();
+                with_tip(
+                    pill_tab("today", "Today", false, cx)
+                        .debug_selector(|| "today".into())
+                        .text_color(if current { t.muted() } else { t.bright })
+                        .when(!current, |b| b.font_weight(FontWeight::MEDIUM))
+                        .hover(|s| s.bg(t.hover()).text_color(t.bright))
+                        .on_click(cx.listener(|app, _, _, cx| app.go_today(cx))),
+                    tip_text("Today", "t"),
+                )
+                .into_any_element()
             })
             .child(
                 tool_button("next", IconName::ChevronRight, "Next period", "]", cx)
                     .on_click(cx.listener(|app, _, _, cx| app.navigate(1, cx))),
             )
-            .child(div().w(rems(0.3)).flex_shrink_0())
-            .map(|row| {
-                // Narrow windows trade the title for the search field while searching.
-                if title_search {
-                    row.children(search.take().map(|s| s.flex_1()))
-                } else {
-                    row.child(title).child(div().flex_1().min_w(rems(0.5)))
-                }
-            })
+            .child(div().flex_1().min_w(rems(0.5)))
             .child(self.view_switch(layout.compact, cx))
+            .when(!layout.compact, |row| row.child(separator(cx)))
             .map(|row| {
                 if inline_search {
                     row.children(search.take())
@@ -202,12 +254,17 @@ impl Ocal {
                     )
                 }
             })
+            // The sidebar's New event button replaces this while it is docked.
+            .when(!docked, |row| {
+                row.child(
+                    tool_button("new-event", IconName::Plus, "New event", "c", cx).on_click(
+                        cx.listener(|app, _, window, cx| app.new_event(false, window, cx)),
+                    ),
+                )
+            })
             .child(
-                tool_button("new-event", IconName::Plus, "New event", "C", cx)
-                    .on_click(cx.listener(|app, _, window, cx| app.new_event(false, window, cx))),
-            )
-            .child(
-                tool_button("sync", IconName::RefreshCw, "Sync calendars", "Ctrl R", cx)
+                tool_button("sync", IconName::RefreshCw, "Sync calendars", "ctrl+r", cx)
+                    .when(!layout.compact, |b| b.ml(rems(0.375)))
                     .disabled(self.busy)
                     .on_click(cx.listener(|app, _, _, cx| {
                         app.dispatch(Command::Sync(app.date));
@@ -220,23 +277,16 @@ impl Ocal {
             .into_any_element()
     }
 
-    /// Segmented Day/Week/Month/Agenda/Tasks control; a menu in compact windows.
+    /// Day/Week/Month/Agenda/Tasks as pill tabs; a menu in compact windows.
     fn view_switch(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.omarchy().clone();
         if compact {
             let target = cx.entity().downgrade();
             return menu(
                 "view-menu",
-                button(
-                    "view-trigger",
-                    self.view.compact_label(),
-                    ButtonVariant::Secondary,
-                    cx,
-                )
-                .h(rems(1.7))
-                .border_0()
-                .bg(t.foreground.opacity(0.))
-                .child(icon(IconName::ChevronDown).size(rems(0.75))),
+                pill_tab("view-trigger", self.view.compact_label(), true, cx)
+                    .bg(t.hover())
+                    .child(icon(IconName::ChevronDown).size(rems(0.75))),
                 VIEWS
                     .iter()
                     .enumerate()
@@ -255,39 +305,15 @@ impl Ocal {
         div()
             .flex()
             .flex_shrink_0()
-            .h(rems(1.7))
-            .border_1()
-            .border_color(t.divider())
+            .gap(px(2.))
             .children(VIEWS.into_iter().enumerate().map(|(i, v)| {
-                let active = v == self.view;
-                with_tooltip(
-                    button(("view", i), v.label(), ButtonVariant::Secondary, cx)
+                with_tip(
+                    pill_tab(("view", i), v.label(), v == self.view, cx)
                         .debug_selector(move || format!("view-{i}"))
-                        .h_full()
-                        .px(rems(0.6))
-                        .border_0()
-                        .text_size(rems(0.74))
-                        .relative()
-                        .bg(if active {
-                            t.selection
-                        } else {
-                            t.foreground.opacity(0.)
-                        })
-                        .text_color(if active { t.bright } else { t.secondary })
-                        .hover(|s| s.bg(t.hover_fill()).text_color(t.bright))
-                        .children(active.then(|| {
-                            div()
-                                .absolute()
-                                .left_0()
-                                .right_0()
-                                .bottom_0()
-                                .h(px(2.))
-                                .bg(t.accent)
-                        }))
                         .on_click(
                             cx.listener(move |app, _, window, cx| app.change_view(v, window, cx)),
                         ),
-                    format!("{} · {}", v.label(), i + 1),
+                    tip_text(v.label(), &(i + 1).to_string()),
                 )
             }))
             .into_any_element()
@@ -354,17 +380,14 @@ impl Ocal {
                 .flex()
                 .items_center()
                 .gap(rems(0.35))
-                .child(keycaps(keys, cx))
+                .children(keys.into_iter().map(|k| soft_keycap(k, false, cx)))
                 .child(label)
         };
         let grid = matches!(self.view, View::Day | View::Week) && !self.settings && !self.help;
         div()
             .h(rems(STATUS))
             .flex_shrink_0()
-            .px(rems(0.9))
-            .border_t_1()
-            .border_color(t.divider())
-            .bg(t.inset)
+            .px(rems(0.5))
             .flex()
             .items_center()
             .gap(rems(0.9))
@@ -376,7 +399,7 @@ impl Ocal {
                     .min_w_0()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .text_color(if self.error { t.danger } else { t.secondary })
+                    .text_color(if self.error { t.danger } else { t.muted() })
                     .child(self.status.clone()),
             )
             .children((grid && !layout.compact).then(|| {
@@ -384,8 +407,8 @@ impl Ocal {
                     .flex()
                     .items_center()
                     .gap(rems(0.9))
-                    .text_color(t.secondary)
-                    .child(div().text_color(t.foreground).child(self.selection.label()))
+                    .text_color(t.faint())
+                    .child(div().text_color(t.muted()).child(self.selection.label()))
                     .child(hint(vec!["↑", "↓"], "move"))
                     .child(hint(vec!["shift"], "range"))
                     .child(hint(

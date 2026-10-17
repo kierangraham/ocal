@@ -1,6 +1,10 @@
 //! Mini month, calendar list and upcoming events.
 use super::*;
-use crate::appearance::{nav_row, section_label, swatch};
+use crate::appearance::{
+    RADIUS_CONTROL, RADIUS_FIELD, accent_glow, nav_row, section_label, send_button, swatch,
+    with_tip,
+};
+use gpui_kit::{linear_color_stop, linear_gradient};
 
 impl Ocal {
     fn mini_month(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -304,7 +308,100 @@ impl Ocal {
         }
         list.into_any_element()
     }
-    pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Brand, demo badge and the primary New event button.
+    fn sidebar_top(&self, overlay: bool, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.omarchy().clone();
+        // The palette has no violet; a hue turn from the accent stands in for it.
+        let violet = gpui_kit::Hsla {
+            h: (t.accent.h + 0.11).fract(),
+            ..t.accent
+        };
+        let brand = div()
+            .flex()
+            .items_center()
+            .gap(rems(0.625))
+            .px(rems(0.375))
+            .pt(rems(0.25))
+            .pb(rems(1.))
+            .child(
+                div()
+                    .size(rems(1.625))
+                    .flex_shrink_0()
+                    .rounded(RADIUS_CONTROL)
+                    .bg(linear_gradient(
+                        140.,
+                        linear_color_stop(t.accent, 0.),
+                        linear_color_stop(violet, 1.),
+                    ))
+                    .text_color(t.on_accent)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(IconName::CalendarRange).size(rems(0.95))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(rems(0.94))
+                    .text_color(t.bright)
+                    .child("Ocal"),
+            )
+            .when(self.demo, |row| {
+                row.child(with_tip(
+                    div()
+                        .id("demo-badge")
+                        .debug_selector(|| "demo-badge".into())
+                        .px(rems(0.4375))
+                        .py(rems(0.1875))
+                        .rounded_full()
+                        .bg(t.warning.opacity(0.14))
+                        .text_size(rems(0.625))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.warning)
+                        .child("DEMO"),
+                    "Sample calendar · changes stay in this session",
+                ))
+            })
+            // Floating over a narrow window, the sidebar carries its own close button.
+            .when(overlay, |row| {
+                row.child(
+                    tool_button(
+                        "close-sidebar",
+                        IconName::PanelLeft,
+                        "Hide sidebar",
+                        "b",
+                        cx,
+                    )
+                    .mr(rems(-0.375))
+                    .on_click(cx.listener(|app, _, window, cx| app.toggle_sidebar(window, cx))),
+                )
+            });
+        div()
+            .flex_shrink_0()
+            .px(rems(0.75))
+            .pt(rems(0.875))
+            .child(brand)
+            .child(
+                send_button(
+                    "new-event",
+                    "New event",
+                    Some(IconName::Plus),
+                    Some("c"),
+                    cx,
+                )
+                .debug_selector(|| "new-event".into())
+                .w_full()
+                .h(rems(2.375))
+                .gap(rems(0.5625))
+                .rounded(RADIUS_FIELD)
+                .text_size(rems(0.875))
+                .shadow(accent_glow(&t))
+                .on_click(cx.listener(|app, _, window, cx| app.new_event(false, window, cx))),
+            )
+            .into_any_element()
+    }
+    pub(super) fn sidebar(&self, overlay: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.omarchy().clone();
         div()
             .debug_selector(|| "sidebar".into())
@@ -313,9 +410,7 @@ impl Ocal {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .bg(t.inset)
-            .border_r_1()
-            .border_color(t.divider())
+            .child(self.sidebar_top(overlay, cx))
             .child(self.mini_month(cx))
             .child(
                 div()
