@@ -1,6 +1,7 @@
 //! Event chips shared by the views, plus the agenda and task lists.
 use super::*;
 use crate::appearance::{RADIUS_SMALL, Tones, empty_state, inset_ring, label_chip};
+use gpui_kit::base::ElementExt as _;
 
 /// How an event is drawn outside the time grid.
 #[derive(Clone, Copy, PartialEq)]
@@ -233,7 +234,9 @@ impl Ocal {
             ("event-menu", index),
             chip.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(
-                    cx.listener(move |app, _, window, cx| app.pick_event(pick.clone(), window, cx)),
+                    cx.listener(move |app, _, window, cx| {
+                        app.click_event(pick.clone(), window, cx)
+                    }),
                 ),
             self.event_items(e),
             move |index, window, cx| {
@@ -289,6 +292,37 @@ impl Ocal {
                     )),
             );
         }
+        // "Today 17 October", "Tomorrow 18 October", "Monday 19 October".
+        let heading = |day: NaiveDate| {
+            let name = match (day - today).num_days() {
+                0 => "Today".to_string(),
+                1 => "Tomorrow".to_string(),
+                -1 => "Yesterday".to_string(),
+                _ => day.format("%A").to_string(),
+            };
+            div()
+                .flex()
+                .items_baseline()
+                .gap(rems(0.5))
+                .px(rems(0.75))
+                .pt(rems(1.))
+                .pb(rems(0.375))
+                .child(
+                    div()
+                        .text_size(rems(0.875))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if day == today { t.accent } else { t.bright })
+                        .child(name),
+                )
+                .child(div().text_size(rems(0.75)).text_color(t.muted()).child(
+                    if day.year() == today.year() {
+                        day.format("%-d %B").to_string()
+                    } else {
+                        day.format("%-d %B %Y").to_string()
+                    },
+                ))
+        };
+        let mut days = Vec::new();
         let mut index = 0;
         let mut i = 0;
         while i < events.len() {
@@ -298,38 +332,19 @@ impl Ocal {
                 .take_while(|e| e.dates_in(tz).0.max(from) == day)
                 .collect();
             i += group.len();
-            let is_today = day == today;
-            // "Today 17 October", "Tomorrow 18 October", "Monday 19 October".
-            let name = match (day - today).num_days() {
-                0 => "Today".to_string(),
-                1 => "Tomorrow".to_string(),
-                -1 => "Yesterday".to_string(),
-                _ => day.format("%A").to_string(),
-            };
+            // Remember where each heading sits in the list for the sticky copy.
+            let target = cx.entity().downgrade();
+            let scroll = self.agenda_scroll.clone();
+            let n = days.len();
+            days.push(day);
             list = list
-                .child(
-                    div()
-                        .flex()
-                        .items_baseline()
-                        .gap(rems(0.5))
-                        .px(rems(0.75))
-                        .pt(rems(1.))
-                        .pb(rems(0.375))
-                        .child(
-                            div()
-                                .text_size(rems(0.875))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(if is_today { t.accent } else { t.bright })
-                                .child(name),
-                        )
-                        .child(div().text_size(rems(0.75)).text_color(t.muted()).child(
-                            if day.year() == today.year() {
-                                day.format("%-d %B").to_string()
-                            } else {
-                                day.format("%-d %B %Y").to_string()
-                            },
-                        )),
-                )
+                .child(heading(day).on_prepaint(move |bounds, _, cx| {
+                    let y = bounds.top() - scroll.bounds().top() - scroll.offset().y;
+                    let _ = target.update(cx, |app, _| {
+                        app.agenda_headings.truncate(n);
+                        app.agenda_headings.push(y);
+                    });
+                }))
                 .children(group.into_iter().map(|e| {
                     index += 1;
                     self.event_chip(e, 100000 + index, Chip::Row, cx)
@@ -352,14 +367,46 @@ impl Ocal {
                 )
             });
         }
+        // GPUI has no sticky positioning: once a day's heading scrolls past the
+        // top, a copy of it stays there until the next day's takes over.
+        let top = -self.agenda_scroll.offset().y;
+        let sticky = self
+            .agenda_headings
+            .iter()
+            .take(days.len())
+            .rposition(|&y| y < top)
+            .map(|n| {
+                div()
+                    .debug_selector(|| "agenda-sticky".into())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .px(rems(0.75))
+                    .bg(t.background)
+                    .child(
+                        div()
+                            .max_w(rems(54.))
+                            .child(heading(days[n]).pt(rems(0.625))),
+                    )
+            });
         div()
-            .id("agenda-scroll")
-            .debug_selector(|| "agenda-scroll".into())
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.agenda_scroll)
-            .child(list)
+            .relative()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("agenda-scroll")
+                    .debug_selector(|| "agenda-scroll".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.agenda_scroll)
+                    .child(list),
+            )
+            .children(sticky)
             .into_any_element()
     }
     pub(super) fn tasks(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -474,7 +521,7 @@ impl Ocal {
                                     }),
                             )
                             .on_click(cx.listener(move |app, _, window, cx| {
-                                app.pick_event(pick.clone(), window, cx)
+                                app.click_event(pick.clone(), window, cx)
                             })),
                     ),
             );

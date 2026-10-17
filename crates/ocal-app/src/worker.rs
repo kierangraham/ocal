@@ -24,7 +24,11 @@ pub enum Command {
     SavePreference(String, String),
     Import,
     Export(Vec<CalendarEvent>),
+    /// Answered once every command sent before it has been handled.
+    Flush(mpsc::Sender<()>),
 }
+/// Set when quitting sent work that must finish first; `main` waits on it.
+pub static QUIT_FLUSH: std::sync::Mutex<Option<mpsc::Receiver<()>>> = std::sync::Mutex::new(None);
 pub enum Event {
     Snapshot(Snapshot),
     /// Sent when a sync starts and again when it ends.
@@ -94,6 +98,10 @@ impl Worker {
                         }
                         continue;
                     }
+                    Ok(Command::Flush(done)) => {
+                        let _ = done.send(());
+                        continue;
+                    }
                     Ok(command) => command,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -153,7 +161,9 @@ impl Worker {
                             service.store.delete_set(&id)?;
                             Ok(Some(Event::Status("Calendar set removed".into())))
                         }
-                        Command::SavePreference(..) => unreachable!("handled on receipt"),
+                        Command::SavePreference(..) | Command::Flush(_) => {
+                            unreachable!("handled on receipt")
+                        }
                         Command::Connect => {
                             if demo {
                                 anyhow::bail!("Demo has no live accounts");

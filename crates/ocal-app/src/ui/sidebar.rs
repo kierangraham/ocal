@@ -214,8 +214,9 @@ impl Ocal {
                     .bg(t.hair())
                     .child(div().h_full().w(relative(done)).rounded_full().bg(color)),
             )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(
-                cx.listener(move |app, _, window, cx| app.pick_event(pick.clone(), window, cx)),
+                cx.listener(move |app, _, window, cx| app.click_event(pick.clone(), window, cx)),
             );
         self.anchor_event(card, e, cx).into_any_element()
     }
@@ -347,9 +348,13 @@ impl Ocal {
                         .child(note),
                 );
             let pick = e.clone();
-            list = list.child(self.anchor_event(row, &e, cx).on_click(
-                cx.listener(move |app, _, window, cx| app.pick_event(pick.clone(), window, cx)),
-            ));
+            list = list.child(
+                self.anchor_event(row, &e, cx)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.click_event(pick.clone(), window, cx)
+                    })),
+            );
         }
         list.into_any_element()
     }

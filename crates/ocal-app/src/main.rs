@@ -85,5 +85,9 @@ fn main() -> Result<()> {
             .expect("Open Ocal window");
             cx.activate(true);
         });
+    // Deletes sent while quitting may need the network; let them finish.
+    if let Some(finished) = worker::QUIT_FLUSH.lock().ok().and_then(|mut s| s.take()) {
+        let _ = finished.recv_timeout(std::time::Duration::from_secs(10));
+    }
     Ok(())
 }

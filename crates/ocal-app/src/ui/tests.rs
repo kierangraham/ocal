@@ -1661,3 +1661,68 @@ fn tasks_show_in_month_and_agenda_and_dates_open_the_day(cx: &mut TestAppContext
         assert_eq!(app.date, month_days(app.date)[17]);
     });
 }
+
+#[gpui_kit::test]
+fn quitting_sends_deletes_still_offering_undo(cx: &mut TestAppContext) {
+    let app_cx = cx.clone();
+    let (view, cx, commands) = fixture(cx);
+    while commands.try_recv().is_ok() {}
+    let e = demo_event(&view, cx, "Deep work");
+    view.update(cx, |app, cx| app.delete_event(e, cx));
+    assert!(commands.try_recv().is_err());
+    app_cx.quit();
+    let sent: Vec<_> = commands.try_iter().collect();
+    assert!(matches!(&sent[..], [Command::Delete(e), Command::Flush(_)] if e.title == "Deep work"));
+    assert!(crate::worker::QUIT_FLUSH.lock().unwrap().take().is_some());
+}
+
+#[gpui_kit::test]
+fn clicking_the_event_again_or_elsewhere_closes_its_details(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    let e = demo_event(&view, cx, "Deep work");
+    open_details(&view, cx, e.clone());
+    let event = view.read_with(cx, |app, _| app.event_anchors[&anchor_key(&e)]);
+    cx.simulate_click(event.center(), Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.selected.is_none()));
+    cx.simulate_click(event.center(), Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.selected.is_some()));
+    // A click on the sidebar, outside the card, closes it.
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    cx.simulate_click(
+        point(sidebar.center().x, sidebar.bottom() - px(80.)),
+        Default::default(),
+    );
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.selected.is_none()));
+}
+
+#[gpui_kit::test]
+fn agenda_day_headings_stay_at_the_top_while_scrolling(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    cx.simulate_keystrokes("4");
+    draw(cx);
+    draw(cx);
+    assert!(cx.debug_bounds("agenda-sticky").is_none());
+    let headings = view.read_with(cx, |app, _| app.agenda_headings.clone());
+    assert!(headings.len() > 2 && headings.windows(2).all(|w| w[0] < w[1]));
+    // Scroll to just past the second day's heading: it stays pinned.
+    view.update(cx, |app, cx| {
+        app.agenda_scroll
+            .set_offset(point(px(0.), -(headings[1] + px(20.))));
+        cx.notify();
+    });
+    draw(cx);
+    let sticky = cx.debug_bounds("agenda-sticky").unwrap();
+    let list = cx.debug_bounds("agenda-scroll").unwrap();
+    assert!((sticky.top() - list.top()).abs() < px(1.));
+    assert_eq!(
+        view.read_with(cx, |app, _| {
+            app.agenda_headings
+                .iter()
+                .rposition(|&y| y < -app.agenda_scroll.offset().y)
+        }),
+        Some(1)
+    );
+}

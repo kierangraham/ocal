@@ -232,6 +232,8 @@ pub struct Ocal {
     grid_scroll: ScrollHandle,
     form_scroll: ScrollHandle,
     agenda_scroll: ScrollHandle,
+    /// Where each agenda day heading sits in the list, for the sticky heading.
+    agenda_headings: Vec<Pixels>,
     grid_bounds: HashMap<NaiveDate, Bounds<Pixels>>,
     /// Where each event was last drawn, by event ID, so its details card can sit
     /// beside it. Views record this with `anchor_event`.
@@ -273,16 +275,10 @@ impl Ocal {
             cx.new(|cx| InputState::new(window, cx).placeholder("Name this calendar set"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify())
             .detach();
-        // Deletes still offering Undo go out on quit; give the worker a moment.
-        cx.on_app_quit(|app, cx| {
-            let waiting = !app.pending_deletes.is_empty();
+        // Deletes still offering Undo go out on quit; `main` waits for them.
+        cx.on_app_quit(|app, _| {
             app.flush_deletes();
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(if waiting {
-                    150
-                } else {
-                    0
-                }))
+            std::future::ready(())
         })
         .detach();
         let events = worker.events;
@@ -364,6 +360,7 @@ impl Ocal {
             grid_scroll: ScrollHandle::new(),
             form_scroll: ScrollHandle::new(),
             agenda_scroll: ScrollHandle::new(),
+            agenda_headings: Vec::new(),
             grid_bounds: HashMap::new(),
             event_anchors: HashMap::new(),
             dragging: false,
@@ -926,6 +923,17 @@ impl Ocal {
         window.focus(&self.focus, cx);
         cx.notify();
     }
+    /// A click on an event opens its details, or closes them if they're open.
+    pub(super) fn click_event(&mut self, e: Event, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_selected(&e) {
+            self.selected = None;
+            self.event_menu = false;
+            window.focus(&self.focus, cx);
+            cx.notify();
+        } else {
+            self.pick_event(e, window, cx);
+        }
+    }
     pub(super) fn pick_event(&mut self, e: Event, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor.is_some() {
             return;
@@ -984,10 +992,19 @@ impl Ocal {
         );
         cx.notify();
     }
-    /// Send deletes still waiting on their Undo toast.
+    /// Send deletes still waiting on their Undo toast, and let `main` know to wait
+    /// until the worker has handled them before the process exits.
     fn flush_deletes(&mut self) {
+        if self.pending_deletes.is_empty() {
+            return;
+        }
         for e in std::mem::take(&mut self.pending_deletes) {
             self.dispatch(Command::Delete(e));
+        }
+        let (done, finished) = mpsc::channel();
+        self.dispatch(Command::Flush(done));
+        if let Ok(mut slot) = crate::worker::QUIT_FLUSH.lock() {
+            *slot = Some(finished);
         }
     }
     /// Mark a task done or not done, wherever its checkbox is drawn.
@@ -1326,6 +1343,17 @@ impl Render for Ocal {
                     }
                     cx.stop_propagation();
                     cx.notify();
+                }),
+            )
+            // Events and the card stop the press, so anything reaching here was
+            // outside them and closes the details.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|app, _, _, cx| {
+                    if app.selected.is_some() && !app.event_menu {
+                        app.selected = None;
+                        cx.notify();
+                    }
                 }),
             )
             .child(body);

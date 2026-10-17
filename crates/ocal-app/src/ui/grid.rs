@@ -729,7 +729,7 @@ impl Ocal {
             .child(body)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(
-                cx.listener(move |app, _, window, cx| app.pick_event(ev.clone(), window, cx)),
+                cx.listener(move |app, _, window, cx| app.click_event(ev.clone(), window, cx)),
             );
         let trigger = self.anchor_event(trigger, e, cx);
         let action = e.clone();
