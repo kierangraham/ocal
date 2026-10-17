@@ -1,97 +1,185 @@
 # Ocal
 
-A native calendar for Omarchy, built with Rust, GPUI Kit and GPUI Omarchy: the same stack as Disktree and Omail. Google Calendar first, with local calendars that work immediately.
+A native calendar app for Omarchy, built in Rust with GPUI. It syncs Google Calendar and keeps local calendars and tasks on your machine.
 
-This is an early working build. The reference is Fantastical's clean calendar, sidebar agenda and compact event editor; [the feature matrix](docs/features.md) separates implemented behavior from remaining work. There is no natural-language entry.
-
-## Try it
-
-```sh
-make install
-ocal --demo
-```
-
-`--demo` uses an in-memory sample calendar and never connects to Google. Run `ocal` for your persistent calendar. Installation adds an application launcher entry, executable and icon under `~/.local`. `PREFIX` and `TARGET_DIR` can be overridden.
-
-`make clean` removes generated build artifacts. If using Omail's shared build directory, use `make clean TARGET_DIR=../omail/target`. Installed apps and calendar data remain available; the next build recompiles dependencies. Development builds disable debug symbols and incremental compilation to limit disk usage. For debugging, enable symbols with `CARGO_PROFILE_DEV_DEBUG=limited`.
-
-Rust 1.97.0 is pinned. Arch needs a C/C++ compiler, CMake, pkg-config, OpenSSL, D-Bus, Fontconfig, Wayland, xkbcommon, Vulkan and ALSA development libraries. GPUI needs a graphics driver; native file dialogs use the desktop portal. Google credentials use an unlocked Secret Service keyring.
+This is an early build. [The feature list](docs/features.md) shows what works and what is still missing.
 
 ![Ocal week view](docs/week.png)
 
-## Add events quickly
+## Requirements
 
-- Arrows move a thin time cursor between days and in 15-minute steps. Crossing an event highlights it; **Enter** opens its details beside it, and **Enter** again edits it. **Delete** removes the open event, with **Undo** in the message that follows. Hold **Shift** to extend a new-event range by 15 minutes per step, even through existing events; **Enter** opens the editor for that range. **C** always creates a new event.
-- Timed events match their actual duration, including short appointments and overnight continuations. Short events use a compact title; longer events show their time and location as space allows.
-- **Shift-drag** across empty calendar space selects a range in 15-minute increments and opens the editor on release. Drag in either direction or across days.
-- Double-click an empty slot, right-click for a context menu, use **Add**, or press **C / Ctrl+N**. All routes open the same explicit form.
-- The editor floats over the calendar. Fill the title, then the date and times on one row; calendars are tabs when there are a few. Location and a meeting choice stay readily accessible. Expand **More details** for guests, notes, repetition and time zone. **Ctrl+Enter** saves; **Escape** closes, with a discard check for changes.
-- Choose **Paste a meeting link** for an existing Meet, Zoom, Teams or other HTTP(S) link. Choose **Generate Google Meet** for a Google calendar that advertises Meet support. Ocal requests the conference on save, displays a pending state if Google is still generating it, and offers **Join meeting** once available. Ocal automatically checks the new conference for up to a minute; manual sync can also refresh it. Retry uses the same request ID. Choosing **No meeting link** removes an existing Google conference explicitly.
-- Guest invitations are a separate explicit choice. Remote events show **Save & invite** when guests and notification are enabled.
+- **Omarchy** on Arch Linux.
+- **Rust 1.97.0.** `rust-toolchain.toml` pins it, and rustup installs it on the first build.
+- **Build tools and libraries:**
 
-Day, week, month, agenda and local tasks views share a mini calendar and calendar sets. Small windows use one day with a compact view picker and an optional sidebar. Scrolling forms keep the save button visible. Theme colors and typography follow Omarchy, or a light or dark override from the sidebar footer or Settings; icons, context menus and focus behavior match Omail.
+  ```sh
+  sudo pacman -S --needed rustup base-devel clang cmake pkgconf openssl dbus \
+    fontconfig wayland libxkbcommon vulkan-icd-loader alsa-lib
+  ```
 
-## Keyboard
+- **A Secret Service keyring** for Google sign-in. Omarchy's GNOME Keyring works. Unlock it before you connect an account.
+- **Your own Google OAuth client** to use Google Calendar. See [Connect Google Calendar](#connect-google-calendar). Local calendars work without one.
 
-| Key | Action |
-| --- | --- |
-| Arrows / Shift+arrows | Move the time cursor / extend a new-event range |
-| Enter | Open the highlighted event, or add at the cursor / range |
-| C / Ctrl+N | New event |
-| T | Today |
-| 1 / 2 / 3 / 4 / 5 | Day / week / month / agenda / tasks |
-| [ / ] | Previous / next period |
-| / / Ctrl+F | Search cached events |
-| Menu / Shift+F10 | Context menu for the current selection |
-| Ctrl+Enter | Save event |
-| Escape | Dismiss or return to the calendar |
-| Ctrl+R | Sync |
-| B | Toggle compact sidebar |
-| Ctrl+plus / minus / 0 | Zoom in / out / reset |
-| ? | Shortcuts card; the … menu has the full list |
+## Install
 
-Navigation shortcuts do not consume text typed into the editor or search field. Context menus handle their own arrows, Enter and Escape.
+```sh
+git clone https://github.com/kierangraham/ocal
+cd ocal
+make install
+```
+
+`make install` builds a release binary and installs these files under `~/.local`:
+
+- `bin/ocal`
+- `share/applications/ocal.desktop`
+- `share/icons/hicolor/scalable/apps/ocal.svg`
+
+Set `PREFIX` to install somewhere else. `make uninstall` removes the same three files. Your calendar data stays.
+
+To update, pull and run `make install` again.
 
 ## Connect Google Calendar
 
-In a publisher-configured build, open settings and choose **Copy Google sign-in link**. Ocal copies the original authorization URL without opening a browser. Paste it into your preferred browser profile, pick your account and approve access; keep Ocal open until the connection finishes. No Cloud project, JSON file or password entry in Ocal is required from users. OAuth uses PKCE, state verification and a loopback callback; tokens go into Secret Service, not the calendar database. Sign-in progress and errors appear beside the account button; a completed connection returns to the calendar. Google authorization and initial calendar sync are separate stages.
+**This repository ships no Google OAuth client.** Each user registers a free Desktop app client in their own Google Cloud project. Without one, Settings explains that sign-in is unavailable, and local calendars still work.
 
-Connect any number of Google accounts. After the first, choose **Add Google account** in Settings; the sidebar also provides a shortcut. Each account’s sign-in link leads to Google’s account chooser. **Copy again** retains the same active attempt; links remain active for ten minutes. **Cancel** releases the attempt so a fresh link can be generated. **Open default browser** is an explicit optional action. Copy the link from Ocal rather than copying an intermediate Google login page or the final localhost callback. Calendars are grouped under their account email, and the event editor includes the account email in calendar choices. Credentials, cached events and visibility stay separate even when two accounts subscribe to the same shared calendar. Reconnecting an existing account updates it without adding a duplicate. A failed account sync leaves its cache intact and lets other accounts update; adding an account syncs that account independently.
+### Create the client
 
-The source checkout does not ship a public publisher client. Unconfigured builds disable normal sign-in with an explanation; configured builds enable it. Local calendars remain usable in either case. **Advanced connection options → Use a custom client file…** retains the developer-only JSON route.
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a project.
+2. Enable the **Google Calendar API** for it.
+3. Open **Google Auth Platform** and set up the app name and audience. For an **External** audience, add your own Google accounts as **test users**.
+4. Under **Data access**, add these two scopes:
+   - `https://www.googleapis.com/auth/calendar.events`
+   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+5. Under **Clients**, create an OAuth client of type **Desktop app**.
+6. Download its JSON file. It holds the client ID and client secret.
 
-Requested scopes are `calendar.events` and `calendar.calendarlist.readonly`. Ocal imports calendar names, colors, time zones, access and Meet capability. It uses paginated Calendar API calls, server-expanded recurring instances and ETags for writes. Google account policy may disable Meet. See [Google's event creation guide](https://developers.google.com/workspace/calendar/api/guides/create-events).
+**Keep the JSON file out of Git.** `.gitignore` already ignores `client_secret*.json` and `.cargo/config.toml`.
 
-Sync covers 60 days before and 120 days after the current navigation period and runs at startup, every five minutes, manually and when navigating into another month. The cache supports offline reading; Google writes require a connection and errors retain the editor for retry. Pending writes are not queued offline. Sync replaces a calendar's cached range only after its complete fetch succeeds.
+**Test-mode sign-ins expire after seven days.** While an External app stays in **Testing**, Google expires its refresh tokens after a week, and you reconnect. Publishing the app removes that limit. Google then shows an "unverified app" warning on sign-in until the app passes verification.
 
-Local data lives at `$XDG_DATA_HOME/ocal/calendar.sqlite3`, normally `~/.local/share/ocal/calendar.sqlite3`. Demo never touches it. Back up the database with Ocal closed. Calendar sets and visibility persist; view, zoom and display-zone choices currently reset on launch.
+### Give Ocal the client
 
-## iCalendar
+Choose one of these two options.
 
-Import/export are in the toolbar menu. Imports go into local Personal, validate the whole file before writing and deduplicate by UID. Basic events, date-only ranges, tasks and simple daily/weekly/monthly/yearly recurrence are supported. Complex rules and exceptions produce an error rather than silently losing their schedule. Export is a basic interchange format, not a complete account backup; attendees, alarms and advanced Google fields are not round-tripped.
+**Option 1: build the client into Ocal.** Create `.cargo/config.toml` in the checkout. Copy the values from the JSON file:
+
+```toml
+[env]
+OCAL_GOOGLE_CLIENT_ID = "1234567890-abc.apps.googleusercontent.com"
+OCAL_GOOGLE_CLIENT_SECRET = "GOCSPX-..."
+```
+
+The values above are placeholders. Then run `make install` again. Cargo compiles the values into the binary, and every later `make install` keeps them.
+
+**Option 2: pick the file in the app.** Open **Settings**, expand **Advanced connection options** and choose **Use a custom client file…**. Select the downloaded JSON file. This needs no rebuild.
+
+### Sign in
+
+1. In **Settings**, choose **Copy Google sign-in link**. Ocal copies the link and does not open a browser.
+2. Paste the link into the browser profile you want. Pick an account and approve access.
+3. Keep Ocal open until the connection finishes. The link stays active for ten minutes.
+
+To add another account, choose **Add Google account**. Ocal groups calendars under each account's email address.
+
+**How Ocal handles the sign-in:**
+
+- **OAuth uses PKCE and a loopback redirect** to `127.0.0.1`. No hosted server is involved.
+- **Tokens go into the Secret Service keyring**, not the calendar database.
+- **Each account keeps the client it signed in with.** Changing the client later does not break existing accounts.
+
+## Usage
+
+Run `ocal`, or open **Ocal** from the app launcher.
+
+![Ocal in light mode, with an event's details open](docs/light.png)
+
+**Views.** Day, week, month, agenda and tasks share a sidebar with a mini calendar, upcoming events and calendar sets. Narrow windows show fewer days, and the sidebar can collapse.
+
+**Adding events.** Any of these opens the event composer:
+
+- Press **C** or **Ctrl+N**.
+- Double-click an empty slot.
+- Shift-drag across empty time to select a range.
+- Move the time cursor with the arrow keys. Hold **Shift** to extend a range, then press **Enter**.
+
+The composer takes a title, date and times first. **More details** adds guests, notes, repetition and time zone. **Ctrl+Enter** saves.
+
+**Meeting links.** Paste a Meet, Zoom, Teams or other link. On a Google calendar that supports Meet, choose **Generate Google Meet**. Ocal shows **Join** once Google creates the meeting.
+
+**Google sync** runs at startup, every five minutes, on **Ctrl+R**, and when you move into another month. It covers 60 days before and 120 days after the period on screen. Cached events stay readable offline.
+
+**iCalendar import and export** are in the toolbar's **…** menu. Imports go into the local Personal calendar.
+
+### Keyboard
+
+| Key | Action |
+| --- | --- |
+| Arrows | Move the time cursor |
+| Shift+arrows | Extend a new-event range |
+| Enter | Open the highlighted event, or add at the cursor |
+| C / Ctrl+N | New event |
+| T | Today |
+| 1 to 5 | Day, week, month, agenda, tasks |
+| [ / ] | Previous / next period |
+| / or Ctrl+F | Search cached events |
+| Ctrl+Enter | Save event |
+| Escape | Close or go back |
+| Ctrl+R | Sync |
+| B | Toggle the sidebar |
+| Ctrl+plus / minus / 0 | Zoom in / out / reset |
+| ? | Shortcuts card |
+
+### Your data
+
+**Local calendars and the Google cache live in one SQLite file:** `~/.local/share/ocal/calendar.sqlite3`. Ocal follows `XDG_DATA_HOME` if you set it. Close Ocal before you back it up.
+
+## Demo mode
+
+```sh
+ocal --demo
+```
+
+**Demo mode uses an in-memory sample calendar.** It never connects to Google and never touches your database. Changes last until you close the window. The app launcher entry has an **Explore Sample Calendar** action that does the same.
+
+## Known issues
+
+These bugs are open:
+
+- **Clicking a task's checkbox also opens its details card.**
+- **The toolbar overflows** when the window is between about 640 and 760 px wide.
+- **After a save, the selection outline stays** until you press Escape a second time.
+
+These features are not built yet:
+
+- **Offline Google edits.** Ocal does not queue them. Saving needs a connection, and the composer stays open to retry.
+- **Reminders.** Ocal keeps reminder settings but sends no notifications.
+- **Moving or resizing events by dragging.**
+- **Removing an account** from the app.
+- **Complex repeat rules.** Import rejects rules with exceptions rather than dropping them.
+- **Full export.** iCalendar export leaves out guests, alarms and Google-only fields.
 
 ## Development
 
 ```sh
-make check
-make test
-make lint
-make demo
+make demo     # run the sample calendar from source
+make run      # run with your real data
+make check    # cargo check, all targets
+make test     # cargo test
+make lint     # rustfmt check and clippy with warnings as errors
+make clean    # remove build output
 ```
 
-### Publisher Google sign-in configuration
+The workspace has two crates:
 
-Google requires one registered Desktop OAuth client for the application. This is publisher setup, not an end-user task; Ocal does not need a hosted authentication server.
+- **`ocal-core`** holds the models, recurrence, layout, SQLite store, OAuth, Google API and iCalendar code.
+- **`ocal-app`** holds the GPUI views and a background worker, so network calls never block drawing.
 
-1. In the publisher’s Google Cloud project, enable **Google Calendar API**.
-2. Configure the Google Auth Platform app identity, audience and requested scopes. Add test users while testing; complete applicable verification before public distribution.
-3. Create a **Desktop app** OAuth client for Ocal.
-4. Set `OCAL_GOOGLE_CLIENT_ID` and, if supplied by Google, `OCAL_GOOGLE_CLIENT_SECRET` in the build environment, then run `make install`. Cargo embeds this application metadata in the binary. Users do not set these variables. Empty or invalid IDs leave ordinary sign-in unavailable. For local development, these build variables can be kept in Cargo’s `[env]` table in `.cargo/config.toml`, which is ignored by Git; then ordinary `make install` rebuilds retain the configuration.
+Debug builds skip debug symbols to save disk. Set `CARGO_PROFILE_DEV_DEBUG=limited` when you need a debugger. [docs/validation.md](docs/validation.md) lists what the tests cover.
 
-Google considers installed applications public clients: bundled client metadata is not a private credential. Account access/refresh tokens and PKCE verifiers are never compiled into the app. Existing accounts retain their original client configuration in the keyring so refresh continues after changing a build's publisher client. A downloaded Desktop client JSON can also be selected through the advanced connection options during development.
+## Licence
 
-See [Google’s native app OAuth requirements](https://developers.google.com/identity/protocols/oauth2/native-app) and [verification guidance](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification). Configuring a client does not replace live-account verification.
+MIT. See [LICENSE](LICENSE).
 
-`ocal-core` contains models, selection, recurrence, overlap layout, SQLite, OAuth, Google API, service and iCalendar logic. `ocal-app` contains native views and a background worker so network calls and dialogs do not block drawing.
+---
 
-See [validation](docs/validation.md) for checks and live-account limitations. MIT licensed. Fantastical, Disktree and Omail are implementation/design references; no proprietary artwork is included.
+[kierangraham.com](https://kierangraham.com)
