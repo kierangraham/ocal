@@ -1726,3 +1726,25 @@ fn agenda_day_headings_stay_at_the_top_while_scrolling(cx: &mut TestAppContext) 
         Some(1)
     );
 }
+
+#[gpui_kit::test]
+fn month_dates_sit_top_left_and_composer_times_clear_the_date(cx: &mut TestAppContext) {
+    let (_view, cx, _commands) = fixture(cx);
+    cx.simulate_keystrokes("3");
+    draw(cx);
+    cx.run_until_parked();
+    draw(cx);
+    let cell = cx.debug_bounds("month-day-17").unwrap();
+    let date = cx.debug_bounds("month-date-17").unwrap();
+    assert!(
+        date.size.width < cell.size.width / 3.,
+        "{date:?} in {cell:?}"
+    );
+    assert!(date.left() - cell.left() < px(12.));
+    cx.simulate_keystrokes("2 c");
+    draw(cx);
+    // The picker's own trigger, not just its slot, must stop short of the time.
+    let day = cx.debug_bounds("date-picker-trigger").unwrap();
+    let start = cx.debug_bounds("editor-start-time").unwrap();
+    assert!(start.left() >= day.right(), "{start:?} overlaps {day:?}");
+}

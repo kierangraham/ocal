@@ -677,7 +677,7 @@ impl Ocal {
         let date = |start: bool, cx: &mut Context<Self>| {
             let picker = if start { &f.start_date } else { &f.end_date };
             div()
-                .w(rems(8.5))
+                .w(rems(10.5))
                 .flex_shrink_0()
                 .debug_selector(move || {
                     if start {
@@ -687,11 +687,10 @@ impl Ocal {
                     }
                     .into()
                 })
-                .child(date_picker(
-                    if start { "start-date" } else { "end-date" },
-                    picker,
-                    cx,
-                ))
+                // gpui-omarchy fixes the picker at 15.5 rem; here it fills its chip.
+                .child(
+                    date_picker(if start { "start-date" } else { "end-date" }, picker, cx).w_full(),
+                )
         };
         let length = (!f.all_day)
             .then(|| Some(f.end(cx)? - f.start(cx)?))

@@ -78,7 +78,7 @@ impl Ocal {
                     .overflow_hidden()
                     .child(
                         // The date opens that day; the first of a month names it.
-                        div().flex_shrink_0().pb(rems(0.1875)).child(
+                        div().flex().flex_shrink_0().pb(rems(0.1875)).child(
                             button(
                                 ("month-date", week * 7 + i),
                                 if date.day() == 1 {
@@ -90,6 +90,7 @@ impl Ocal {
                                 cx,
                             )
                             .accessibility_label(date.format("%A %-d %B").to_string())
+                            .debug_selector(move || format!("month-date-{}", week * 7 + i))
                             .border_0()
                             .min_w(rems(1.5))
                             .h(rems(1.5))
