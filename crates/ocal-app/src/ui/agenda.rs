@@ -1,7 +1,6 @@
 //! Event chips shared by the views, plus the agenda and task lists.
 use super::*;
-use crate::appearance::{empty_state, section_label, swatch};
-use sidebar::relative_day;
+use crate::appearance::{RADIUS_SMALL, Tones, empty_state, inset_ring, label_chip};
 
 /// How an event is drawn outside the time grid.
 #[derive(Clone, Copy, PartialEq)]
@@ -15,7 +14,7 @@ pub(super) enum Chip {
 }
 
 impl Ocal {
-    fn is_selected(&self, e: &Event) -> bool {
+    pub(super) fn is_selected(&self, e: &Event) -> bool {
         self.selected
             .as_ref()
             .is_some_and(|s| s.id == e.id && s.start == e.start)
@@ -32,7 +31,7 @@ impl Ocal {
         let tz = self.tz();
         let color = self.calendar_color(&e.calendar, cx);
         let selected = self.is_selected(e);
-        let past = e.end <= Utc::now();
+        let past = e.end <= Utc::now() && !e.task;
         let pick = e.clone();
         let action = e.clone();
         let target = cx.entity().downgrade();
@@ -47,108 +46,189 @@ impl Ocal {
             .w_full()
             .min_w_0()
             .border_0()
-            .justify_start()
-            .when(past && !selected, |b| b.opacity(0.6));
-        let chip = match style {
-            Chip::Bar => base
-                .h(rems(1.15))
-                .px(rems(0.35))
-                .border_l_2()
-                .border_color(color)
-                .bg(if selected {
-                    t.selection
-                } else {
-                    tint(&t, color, 0.16)
-                })
-                .hover({
-                    let hover = tint(&t, color, 0.26);
-                    move |s| s.bg(hover)
-                })
-                .text_size(rems(0.65))
-                .text_color(event_text(&t, color))
-                .child(div().min_w_0().text_ellipsis().child(e.title.clone())),
-            Chip::Dot => base
-                .h(rems(1.15))
-                .px(rems(0.3))
-                .gap(rems(0.35))
-                .bg(if selected {
-                    t.selection
-                } else {
-                    t.foreground.opacity(0.)
-                })
-                .hover(|s| s.bg(t.hover_fill()))
-                .text_size(rems(0.65))
-                .child(div().size(rems(0.4)).flex_shrink_0().bg(color))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(t.secondary)
-                        .child(e.start.with_timezone(&tz).format("%H:%M").to_string()),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .text_color(t.foreground)
-                        .child(e.title.clone()),
-                ),
-            Chip::Row => base
-                .h(rems(2.6))
-                .px(rems(0.75))
-                .gap(rems(0.75))
-                .bg(if selected {
-                    t.selection
-                } else {
-                    t.foreground.opacity(0.)
-                })
-                .hover(|s| s.bg(t.hover_fill()))
-                .children(selected.then(|| {
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.))
-                        .bg(t.accent)
-                }))
-                .child(
-                    div()
-                        .w(rems(6.5))
-                        .flex_shrink_0()
-                        .text_size(rems(0.72))
-                        .text_color(t.secondary)
-                        .child(e.time_label(tz)),
-                )
-                .child(div().w(px(3.)).h(rems(1.6)).flex_shrink_0().bg(color))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(rems(0.1))
-                        .child(
-                            div()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_color(t.bright)
-                                .child(e.title.clone()),
-                        )
-                        .children((!e.location.is_empty()).then(|| {
-                            div()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_size(rems(0.68))
-                                .text_color(t.secondary)
-                                .child(e.location.clone())
-                        })),
-                )
-                .children((!e.link.is_empty()).then(|| {
-                    icon(IconName::Video)
-                        .size(rems(0.85))
-                        .text_color(t.secondary)
-                })),
+            .justify_start();
+        let title = |c: gpui_kit::Hsla| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .text_color(c)
+                .when(e.task && e.completed, |d| d.line_through())
+                .child(e.title.clone())
         };
+        let chip = match style {
+            // All-day events are filled pills; tasks are outlined, with a checkbox.
+            Chip::Bar => {
+                let (fill, hover, text) = if selected {
+                    (color, color, t.on_accent)
+                } else if e.task {
+                    (
+                        t.foreground.opacity(0.),
+                        t.hover(),
+                        if e.completed { t.muted() } else { t.foreground },
+                    )
+                } else {
+                    (
+                        tint(&t, color, 0.16),
+                        tint(&t, color, 0.24),
+                        event_text(&t, color),
+                    )
+                };
+                base.h(rems(1.375))
+                    .px(rems(0.5))
+                    .gap(rems(0.4375))
+                    .rounded(RADIUS_SMALL)
+                    .bg(fill)
+                    .hover(move |s| s.bg(hover))
+                    .when(e.task && !selected, |b| b.shadow(inset_ring(t.hair(), 1.)))
+                    .text_size(rems(0.75))
+                    .font_weight(FontWeight::MEDIUM)
+                    .children(
+                        e.task
+                            .then(|| self.task_toggle(("chip-check", index), e, rems(0.8125), cx)),
+                    )
+                    .child(title(text))
+            }
+            Chip::Dot => {
+                let text = if selected {
+                    t.on_accent
+                } else if past {
+                    t.muted()
+                } else {
+                    t.foreground
+                };
+                base.h(rems(1.25))
+                    .px(rems(0.3125))
+                    .gap(rems(0.375))
+                    .rounded(rems(0.3125))
+                    .bg(if selected {
+                        color
+                    } else {
+                        t.foreground.opacity(0.)
+                    })
+                    .hover({
+                        let hover = if selected { color } else { t.hover() };
+                        move |s| s.bg(hover)
+                    })
+                    .text_size(rems(0.75))
+                    .child(
+                        div()
+                            .size(rems(0.375))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(if selected { t.on_accent } else { color }),
+                    )
+                    .child(title(text))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(rems(0.69))
+                            .text_color(if selected {
+                                t.on_accent.opacity(0.7)
+                            } else {
+                                t.faint()
+                            })
+                            .child(e.start.with_timezone(&tz).format("%H:%M").to_string()),
+                    )
+            }
+            Chip::Row => {
+                let minutes = (e.end - e.start).num_minutes();
+                let (time, detail) = if e.task {
+                    ("Task".to_string(), None)
+                } else if e.all_day.is_some() {
+                    ("All day".to_string(), None)
+                } else {
+                    (
+                        e.start.with_timezone(&tz).format("%H:%M").to_string(),
+                        Some(duration_label(minutes)),
+                    )
+                };
+                let sub = !e.location.is_empty() || !e.link.is_empty();
+                base.min_h(rems(3.))
+                    .py(rems(0.4375))
+                    .px(rems(0.75))
+                    .gap(rems(0.875))
+                    .rounded(rems(0.625))
+                    .bg(if selected {
+                        t.selection
+                    } else {
+                        t.foreground.opacity(0.)
+                    })
+                    .hover({
+                        let hover = if selected { t.selection } else { t.hover() };
+                        move |s| s.bg(hover)
+                    })
+                    .child(
+                        div()
+                            .w(rems(5.5))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .text_size(rems(0.78))
+                            .text_color(if past { t.muted() } else { t.foreground })
+                            .child(time)
+                            .children(detail.map(|d| {
+                                div().text_size(rems(0.72)).text_color(t.muted()).child(d)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .w(px(3.))
+                            .h(rems(2.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(color),
+                    )
+                    .children(
+                        e.task
+                            .then(|| self.task_toggle(("row-check", index), e, rems(1.), cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(rems(0.0625))
+                            .child(
+                                title(if past || e.completed {
+                                    t.muted()
+                                } else {
+                                    t.bright
+                                })
+                                .font_weight(FontWeight::MEDIUM),
+                            )
+                            .children(sub.then(|| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(rems(0.375))
+                                    .min_w_0()
+                                    .text_size(rems(0.78))
+                                    .text_color(t.muted())
+                                    .when(!e.location.is_empty(), |d| {
+                                        d.child(icon(IconName::MapPin).size(rems(0.8125))).child(
+                                            div()
+                                                .min_w_0()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .child(e.location.clone()),
+                                        )
+                                    })
+                                    .when(!e.location.is_empty() && !e.link.is_empty(), |d| {
+                                        d.child("·")
+                                    })
+                                    .when(!e.link.is_empty(), |d| {
+                                        d.child(icon(IconName::Video).size(rems(0.8125)))
+                                            .child(meeting_provider(&e.link))
+                                    })
+                            })),
+                    )
+                    .child(label_chip(self.calendar_name(&e.calendar), color))
+            }
+        };
+        let chip = self.anchor_event(chip, e, cx);
         menu(
             ("event-menu", index),
             chip.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -179,21 +259,28 @@ impl Ocal {
         } else {
             (self.date, self.date + Duration::days(60))
         };
-        let events: Vec<_> = self
-            .events(from, to, cx)
-            .into_iter()
-            .filter(|e| !e.task && !e.completed)
-            .collect();
-        let mut list = div().flex().flex_col();
+        let mut events = self.events(from, to, cx);
+        // Within a day, all-day items and tasks lead.
+        events.sort_by_key(|e| {
+            (
+                e.dates_in(tz).0.max(from),
+                e.all_day.is_none() && !e.task,
+                e.start,
+            )
+        });
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .px(rems(0.75))
+            .pb(rems(2.))
+            .max_w(rems(54.));
         if searching {
             list = list.child(
                 div()
-                    .px(rems(1.))
-                    .py(rems(0.6))
-                    .border_b_1()
-                    .border_color(t.divider())
-                    .text_size(rems(0.72))
-                    .text_color(t.secondary)
+                    .px(rems(0.75))
+                    .pt(rems(1.))
+                    .text_size(rems(0.78))
+                    .text_color(t.muted())
                     .child(format!(
                         "{} {} matching “{}”",
                         events.len(),
@@ -212,46 +299,41 @@ impl Ocal {
                 .collect();
             i += group.len();
             let is_today = day == today;
-            list = list.child(
-                div()
-                    .flex()
-                    .border_b_1()
-                    .border_color(t.divider())
-                    .child(
-                        div()
-                            .w(rems(5.))
-                            .flex_shrink_0()
-                            .pt(rems(0.55))
-                            .pl(rems(1.))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text_size(rems(0.62))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(if is_today { t.accent } else { t.secondary })
-                                    .child(day.format("%a").to_string().to_uppercase()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(rems(1.25))
-                                    .text_color(if is_today { t.accent } else { t.bright })
-                                    .child(day.day().to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(rems(0.6))
-                                    .text_color(t.secondary)
-                                    .child(day.format("%b").to_string()),
-                            ),
-                    )
-                    .child(div().flex_1().min_w_0().py(rems(0.25)).children(
-                        group.into_iter().map(|e| {
-                            index += 1;
-                            self.event_chip(e, 100000 + index, Chip::Row, cx)
-                        }),
-                    )),
-            );
+            // "Today 17 October", "Tomorrow 18 October", "Monday 19 October".
+            let name = match (day - today).num_days() {
+                0 => "Today".to_string(),
+                1 => "Tomorrow".to_string(),
+                -1 => "Yesterday".to_string(),
+                _ => day.format("%A").to_string(),
+            };
+            list = list
+                .child(
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .gap(rems(0.5))
+                        .px(rems(0.75))
+                        .pt(rems(1.))
+                        .pb(rems(0.375))
+                        .child(
+                            div()
+                                .text_size(rems(0.875))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(if is_today { t.accent } else { t.bright })
+                                .child(name),
+                        )
+                        .child(div().text_size(rems(0.75)).text_color(t.muted()).child(
+                            if day.year() == today.year() {
+                                day.format("%-d %B").to_string()
+                            } else {
+                                day.format("%-d %B %Y").to_string()
+                            },
+                        )),
+                )
+                .children(group.into_iter().map(|e| {
+                    index += 1;
+                    self.event_chip(e, 100000 + index, Chip::Row, cx)
+                }));
         }
         if events.is_empty() {
             list = list.child(if searching {
@@ -292,26 +374,48 @@ impl Ocal {
             .collect();
         tasks.sort_by_key(|e| (e.completed, e.start));
         let open = tasks.iter().filter(|e| !e.completed).count();
-        let mut list = div().flex().flex_col().pb(rems(1.));
+        let heading = |name: &'static str, count: usize| {
+            div()
+                .flex()
+                .items_baseline()
+                .gap(rems(0.5))
+                .px(rems(0.75))
+                .pt(rems(1.))
+                .pb(rems(0.375))
+                .child(
+                    div()
+                        .text_size(rems(0.875))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.bright)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .text_size(rems(0.75))
+                        .text_color(t.muted())
+                        .child(count.to_string()),
+                )
+        };
+        let mut list = div().flex().flex_col().px(rems(0.75)).pb(rems(1.));
         for (i, e) in tasks.iter().enumerate() {
             if i == 0 && open > 0 {
-                list = list.child(section_label("TO DO", cx).px(rems(1.)));
+                list = list.child(heading("To do", open));
             }
             if i == open {
-                list = list.child(section_label("COMPLETED", cx).px(rems(1.)));
+                list = list.child(heading("Completed", tasks.len() - open));
             }
-            let color = self.calendar_color(&e.calendar, cx);
             let due = e.date();
             let overdue = !e.completed && due < today;
             let pick = e.clone();
             list = list.child(
                 div()
                     .relative()
-                    .h(rems(2.4))
-                    .px(rems(0.6))
+                    .h(rems(2.625))
+                    .pl(rems(0.375))
                     .flex()
                     .items_center()
-                    .gap(rems(0.5))
+                    .gap(rems(0.25))
+                    .rounded(rems(0.625))
                     .bg(if self.is_selected(e) {
                         t.selection
                     } else {
@@ -332,28 +436,43 @@ impl Ocal {
                             .min_w_0()
                             .h_full()
                             .border_0()
+                            .rounded(rems(0.625))
                             .justify_start()
-                            .gap(rems(0.6))
+                            .gap(rems(0.75))
+                            .px(rems(0.5))
                             .bg(t.foreground.opacity(0.))
-                            .hover(|s| s.bg(t.hover_fill()))
+                            .hover(|s| s.bg(t.hover()))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .text_color(if e.completed { t.secondary } else { t.bright })
+                                    .text_color(if e.completed { t.muted() } else { t.bright })
                                     .when(e.completed, |d| d.line_through())
                                     .child(e.title.clone()),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .text_size(rems(0.7))
-                                    .text_color(if overdue { t.danger } else { t.secondary })
-                                    .child(relative_day(due, today)),
+                                    .text_size(rems(0.75))
+                                    .text_color(if overdue {
+                                        t.danger
+                                    } else if due == today && !e.completed {
+                                        t.accent
+                                    } else {
+                                        t.muted()
+                                    })
+                                    .when(due == today || overdue, |d| {
+                                        d.font_weight(FontWeight::MEDIUM)
+                                    })
+                                    .child(match (due - today).num_days() {
+                                        0 => "Today".to_string(),
+                                        1 => "Tomorrow".to_string(),
+                                        -1 => "Yesterday".to_string(),
+                                        _ => due.format("%a %-d %b").to_string(),
+                                    }),
                             )
-                            .child(swatch(color, true))
                             .on_click(cx.listener(move |app, _, window, cx| {
                                 app.pick_event(pick.clone(), window, cx)
                             })),
@@ -375,5 +494,35 @@ impl Ocal {
             .overflow_y_scroll()
             .child(div().max_w(rems(48.)).child(list))
             .into_any_element()
+    }
+}
+
+/// "30 min", "2 h" or "1 h 30 min".
+pub(super) fn duration_label(minutes: i64) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
+/// The meeting service a link belongs to, for labels and buttons.
+pub(super) fn meeting_provider(link: &str) -> &'static str {
+    let host = link
+        .split("://")
+        .nth(1)
+        .unwrap_or(link)
+        .split(['/', '?'])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    if host.ends_with("meet.google.com") {
+        "Google Meet"
+    } else if host.ends_with("zoom.us") {
+        "Zoom"
+    } else if host.contains("teams.microsoft") || host.contains("teams.live") {
+        "Teams"
+    } else {
+        "Meeting"
     }
 }

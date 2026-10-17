@@ -11,7 +11,7 @@ Reference: [Fantastical](https://flexibits.com/fantastical), [calendar views](ht
 | Event editor | Explicit title, dates, times, calendar, all-day, location, notes, guests, recurrence and IANA zone |
 | Meeting links | Paste any HTTP(S) link; request Google Meet on capable calendars; pending/error states and Join action |
 | Google accounts | Multiple accounts, copied sign-in links for your preferred browser profile, account chooser, grouped sidebar and account-labelled event destinations; separate credentials/cache and independent account sync. A Desktop client is configured locally; live multi-account and public distribution verification still needed |
-| Event operations | Create, edit, duplicate and confirmed delete; remote ETag conflict checks |
+| Event operations | Create, edit, duplicate and delete with Undo (sent once the Undo message goes); remote ETag conflict checks |
 | Invitations | Guest email entry and explicit send-updates choice; Yes/Maybe/No response |
 | Recurrence | Local simple daily/weekly/monthly/yearly rules; Google expands instances; local edits affect the series, Google edits affect the selected instance |
 | Advanced recurrence | Rule UI for specific weekdays, exceptions and this-and-following changes pending |

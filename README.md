@@ -21,11 +21,11 @@ Rust 1.97.0 is pinned. Arch needs a C/C++ compiler, CMake, pkg-config, OpenSSL, 
 
 ## Add events quickly
 
-- Arrows move a thin time cursor between days and in 15-minute steps. Crossing an event highlights it; **Enter** opens its details. Hold **Shift** to extend a new-event range by 15 minutes per step, even through existing events; **Enter** opens the editor for that range. **C** always creates a new event.
+- Arrows move a thin time cursor between days and in 15-minute steps. Crossing an event highlights it; **Enter** opens its details beside it, and **Enter** again edits it. **Delete** removes the open event, with **Undo** in the message that follows. Hold **Shift** to extend a new-event range by 15 minutes per step, even through existing events; **Enter** opens the editor for that range. **C** always creates a new event.
 - Timed events match their actual duration, including short appointments and overnight continuations. Short events use a compact title; longer events show their time and location as space allows.
 - **Shift-drag** across empty calendar space selects a range in 15-minute increments and opens the editor on release. Drag in either direction or across days.
 - Double-click an empty slot, right-click for a context menu, use **Add**, or press **C / Ctrl+N**. All routes open the same explicit form.
-- Fill the title, calendar, start/end dates and times. Location and a meeting choice stay readily accessible. Expand **More details** for guests, notes, repetition and time zone. **Ctrl+Enter** saves; **Escape** closes, with a discard check for changes.
+- The editor floats over the calendar. Fill the title, then the date and times on one row; calendars are tabs when there are a few. Location and a meeting choice stay readily accessible. Expand **More details** for guests, notes, repetition and time zone. **Ctrl+Enter** saves; **Escape** closes, with a discard check for changes.
 - Choose **Paste a meeting link** for an existing Meet, Zoom, Teams or other HTTP(S) link. Choose **Generate Google Meet** for a Google calendar that advertises Meet support. Ocal requests the conference on save, displays a pending state if Google is still generating it, and offers **Join meeting** once available. Ocal automatically checks the new conference for up to a minute; manual sync can also refresh it. Retry uses the same request ID. Choosing **No meeting link** removes an existing Google conference explicitly.
 - Guest invitations are a separate explicit choice. Remote events show **Save & invite** when guests and notification are enabled.
 

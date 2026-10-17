@@ -56,7 +56,6 @@ impl Toast {
     }
     /// Runs when the toast goes without its action being pressed: it timed out, was
     /// closed, or a newer message replaced it. Deferred work (a delete) commits here.
-    #[allow(dead_code)]
     pub(super) fn on_expire(
         mut self,
         expire: impl FnOnce(&mut Ocal, &mut Context<Ocal>) + 'static,

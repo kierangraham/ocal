@@ -1,8 +1,10 @@
-//! Event editor: a docked panel with date pickers and typed, steppable times.
+//! Event editor: a floating card with date pickers and typed, steppable times.
 use super::*;
-use crate::appearance::swatch;
+use crate::appearance::{
+    RADIUS_SMALL, Tones, card_shadow, mode_button, pill_tab, send_button, shadow,
+};
 use gpui_kit::base::CalendarEvent;
-use gpui_omarchy::{DatePickerState, combobox, date_picker, keycaps, switch};
+use gpui_omarchy::{DatePickerState, combobox, date_picker, switch};
 
 const REPEATS: [Repeat; 5] = [
     Repeat::Never,
@@ -11,7 +13,9 @@ const REPEATS: [Repeat; 5] = [
     Repeat::Monthly,
     Repeat::Yearly,
 ];
-const MEETINGS: [&str; 3] = ["None", "Link", "Google Meet"];
+const MEETINGS: [&str; 3] = ["No meeting", "Paste a link", "Google Meet"];
+/// Up to this many calendars are offered as tabs; more get a list.
+const CALENDAR_TABS: usize = 4;
 
 pub(super) struct Editor {
     pub(super) base: Event,
@@ -33,6 +37,8 @@ pub(super) struct Editor {
     pub(super) meet_request: String,
     pub(super) notify: bool,
     pub(super) details: bool,
+    /// The end date is shown even though it matches the start.
+    pub(super) end_shown: bool,
     pub(super) editing: bool,
     pub(super) discard: bool,
     /// The draft as opened, for the unsaved-changes check.
@@ -215,7 +221,11 @@ impl Ocal {
                 .detach();
             field
         };
-        let title = text(e.title.clone(), "Event title", cx);
+        let title = text(
+            e.title.clone(),
+            if e.task { "New task" } else { "New event" },
+            cx,
+        );
         let location = text(e.location.clone(), "Add a location", cx);
         let link = text(e.link.clone(), "https://…", cx);
         let guests = text(
@@ -257,14 +267,8 @@ impl Ocal {
         )
         .detach();
         let calendars: Vec<_> = self
-            .snapshot
-            .calendars
-            .iter()
-            .filter(|c| {
-                c.writable
-                    && (!e.task || c.account.is_none())
-                    && (e.remote_id.is_none() || c.id == e.calendar)
-            })
+            .editor_calendars(&e)
+            .into_iter()
             .map(|c| ChoiceItem::new(c.id.clone(), c.display_name()))
             .collect();
         let index = calendars
@@ -330,6 +334,7 @@ impl Ocal {
             meet_request: uuid::Uuid::new_v4().simple().to_string(),
             notify: true,
             details: false,
+            end_shown: false,
             editing,
             discard: false,
             initial: String::new(),
@@ -584,6 +589,8 @@ impl Ocal {
         f.last_focus = focused;
         let f = self.editor.as_ref().unwrap();
         let scroll = self.form_scroll.clone();
+        let clear = t.foreground.opacity(0.);
+        // Borderless inputs: the card, not each field, is the frame.
         let field = |i: usize,
                      state: &Entity<InputState>,
                      selector: &'static str,
@@ -594,29 +601,34 @@ impl Ocal {
                     .debug_selector(move || selector.into())
                     .w_full()
                     .py(rems(0.22))
-                    .border_1()
-                    .border_color(t.divider())
-                    .bg(t.background),
+                    .border_0()
+                    .bg(clear),
                 reveal == Some(i),
                 &scroll,
             )
         };
-        let label = |text: &'static str| {
-            div()
-                .w(rems(4.2))
-                .flex_shrink_0()
-                .text_size(rems(0.72))
-                .text_color(t.secondary)
-                .child(text)
-        };
-        let line = |name: &'static str, content: AnyElement| {
+        let line = |glyph: IconName, content: AnyElement| {
             div()
                 .flex()
                 .items_center()
-                .gap(rems(0.5))
-                .min_h(rems(2.))
-                .child(label(name))
+                .gap(rems(0.625))
+                .min_h(rems(2.25))
+                .px(rems(0.375))
+                .child(
+                    icon(glyph)
+                        .size(rems(1.))
+                        .flex_shrink_0()
+                        .text_color(t.muted()),
+                )
                 .child(div().flex_1().min_w_0().child(content))
+        };
+        let note = |text: &'static str| {
+            div()
+                .text_size(rems(0.75))
+                .text_color(t.muted())
+                .whitespace_normal()
+                .child(text)
+                .into_any_element()
         };
         let selected_calendar = f
             .calendar
@@ -632,8 +644,7 @@ impl Ocal {
         let can_meet = self.snapshot.calendars.iter().any(|c| {
             c.id == selected_calendar && c.account.is_some() && c.meet_available && c.writable
         });
-        let color = self.calendar_color(&selected_calendar, cx);
-        // A time field that steps by 15 minutes with the arrow keys.
+        // A time chip that steps by 15 minutes with the arrow keys.
         let time = |start: bool, window: &mut Window, cx: &mut Context<Self>| {
             let (i, state, selector) = if start {
                 (1, &f.start_time, "editor-start-time")
@@ -641,8 +652,11 @@ impl Ocal {
                 (2, &f.end_time, "editor-end-time")
             };
             div()
-                .w(rems(5.4))
+                .w(rems(4.25))
                 .flex_shrink_0()
+                .px(rems(0.25))
+                .rounded(RADIUS_SMALL)
+                .bg(t.hover())
                 .capture_key_down(cx.listener(
                     move |app, event: &gpui_kit::KeyDownEvent, window, cx| {
                         let m = &event.keystroke.modifiers;
@@ -660,95 +674,58 @@ impl Ocal {
                 ))
                 .child(field(i, state, selector, window, cx))
         };
-        let when = |start: bool, window: &mut Window, cx: &mut Context<Self>| {
+        let date = |start: bool, cx: &mut Context<Self>| {
             let picker = if start { &f.start_date } else { &f.end_date };
             div()
-                .flex()
-                .gap(rems(0.4))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .debug_selector(move || {
-                            if start {
-                                "editor-start-date"
-                            } else {
-                                "editor-end-date"
-                            }
-                            .into()
-                        })
-                        .child(date_picker(
-                            if start { "start-date" } else { "end-date" },
-                            picker,
-                            cx,
-                        )),
-                )
-                .children((!f.all_day).then(|| time(start, window, cx)))
-                .into_any_element()
+                .w(rems(8.5))
+                .flex_shrink_0()
+                .debug_selector(move || {
+                    if start {
+                        "editor-start-date"
+                    } else {
+                        "editor-end-date"
+                    }
+                    .into()
+                })
+                .child(date_picker(
+                    if start { "start-date" } else { "end-date" },
+                    picker,
+                    cx,
+                ))
         };
         let length = (!f.all_day)
             .then(|| Some(f.end(cx)? - f.start(cx)?))
             .flatten()
             .map(duration_label)
             .unwrap_or_default();
-        let meeting = div()
+        let mut when = div()
             .flex()
-            .h(rems(1.8))
-            .border_1()
-            .border_color(t.divider())
-            .children(MEETINGS.into_iter().enumerate().map(|(i, name)| {
-                let active = f.meeting == i;
-                button(("meeting", i), name, ButtonVariant::Secondary, cx)
-                    .debug_selector(move || format!("meeting-{i}"))
-                    .relative()
-                    .flex_1()
-                    .h_full()
-                    .border_0()
-                    .text_size(rems(0.72))
-                    .disabled(busy || (i == 2 && !can_meet))
-                    .bg(if active {
-                        t.selection
-                    } else {
-                        t.foreground.opacity(0.)
-                    })
-                    .text_color(if active { t.bright } else { t.secondary })
-                    .children(active.then(|| {
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom_0()
-                            .h(px(2.))
-                            .bg(t.accent)
-                    }))
-                    .on_click(cx.listener(move |app, _, window, cx| {
-                        if let Some(f) = &mut app.editor {
-                            f.meeting = i;
-                            if i == 1 {
-                                f.link.update(cx, |s, cx| s.focus(window, cx));
-                            }
-                        }
-                        cx.notify();
-                    }))
-            }));
-        let calendar = div()
-            .flex()
+            .flex_wrap()
             .items_center()
-            .gap(rems(0.5))
-            .child(swatch(color, true))
-            .child(div().flex_1().min_w_0().child(if busy {
-                div()
+            .gap(rems(0.375))
+            .child(date(true, cx));
+        if !f.all_day {
+            when = when.child(time(true, window, cx));
+            if !f.base.task {
+                when = when
                     .child(
-                        f.calendar
-                            .read(cx)
-                            .selected()
-                            .map(|s| s.label.clone())
-                            .unwrap_or_default(),
+                        div()
+                            .text_size(rems(0.75))
+                            .text_color(t.muted())
+                            .child("to"),
                     )
-                    .into_any_element()
-            } else {
-                select("editor-calendar", &f.calendar, window, cx).into_any_element()
-            }));
+                    .child(time(false, window, cx));
+            }
+        }
+        if !length.is_empty() && !f.base.task {
+            when = when.child(
+                div()
+                    .pl(rems(0.25))
+                    .text_size(rems(0.75))
+                    .text_color(t.muted())
+                    .child(length.clone()),
+            );
+        }
         let all_day = {
             let target = cx.entity().downgrade();
             switch("all-day", "All day", f.all_day, cx)
@@ -763,145 +740,170 @@ impl Ocal {
                     });
                 })
         };
+        // The end date only takes room when it can differ from the start.
+        let show_end =
+            !f.base.task && (f.all_day || f.end_shown || f.start_date(cx) != f.end_date(cx));
+        let span = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(rems(0.75))
+            .pl(rems(2.))
+            .pb(rems(0.25))
+            .child(all_day)
+            .map(|row| {
+                if show_end {
+                    row.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(rems(0.375))
+                            .child(
+                                div()
+                                    .text_size(rems(0.75))
+                                    .text_color(t.muted())
+                                    .child("ends"),
+                            )
+                            .child(date(false, cx)),
+                    )
+                } else if f.base.task {
+                    row
+                } else {
+                    row.child(
+                        mode_button("show-end-date", "Ends another day", None, cx)
+                            .disabled(busy)
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                if let Some(f) = &mut app.editor {
+                                    f.end_shown = true;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                }
+            });
+        let calendars = self.editor_calendars(&f.base).len();
+        let calendar = if busy {
+            div()
+                .child(
+                    f.calendar
+                        .read(cx)
+                        .selected()
+                        .map(|s| s.label.clone())
+                        .unwrap_or_default(),
+                )
+                .into_any_element()
+        } else if calendars <= CALENDAR_TABS {
+            let options = self.editor_calendars(&f.base);
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(rems(0.25))
+                .children(options.into_iter().enumerate().map(|(i, c)| {
+                    let state = f.calendar.clone();
+                    pill_tab(("calendar-choice", i), "", c.id == selected_calendar, cx)
+                        .debug_selector(move || format!("calendar-choice-{i}"))
+                        .child(
+                            div()
+                                .size(rems(0.4375))
+                                .rounded_full()
+                                .bg(self.calendar_color(&c.id, cx)),
+                        )
+                        .child(c.name.clone())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            state.update(cx, |s, cx| s.set_selected(Some(i), cx));
+                            cx.notify();
+                        }))
+                }))
+                .into_any_element()
+        } else {
+            select("editor-calendar", &f.calendar, window, cx).into_any_element()
+        };
+        let meeting = div().flex().flex_wrap().gap(rems(0.25)).children(
+            MEETINGS.into_iter().enumerate().map(|(i, name)| {
+                pill_tab(("meeting", i), name, f.meeting == i, cx)
+                    .debug_selector(move || format!("meeting-{i}"))
+                    .disabled(busy || (i == 2 && !can_meet))
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        if let Some(f) = &mut app.editor {
+                            f.meeting = i;
+                            if i == 1 {
+                                f.link.update(cx, |s, cx| s.focus(window, cx));
+                            }
+                        }
+                        cx.notify();
+                    }))
+            }),
+        );
         let mut body = div()
             .id("editor-scroll")
             .debug_selector(|| "editor-scroll".into())
-            .flex_1()
+            .flex_shrink(1.)
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.form_scroll)
-            .px(rems(1.))
-            .pb(rems(1.))
+            .px(rems(0.75))
+            .pb(rems(0.5))
             .flex()
             .flex_col()
-            .gap(rems(0.55))
-            .child(reveal_field(
-                input("editor-title", &f.title, window, cx)
-                    .debug_selector(|| "editor-title".into())
-                    .w_full()
-                    .text_size(rems(1.05))
-                    .border_0()
-                    .border_b_1()
-                    .border_color(t.divider())
-                    .bg(t.background),
-                reveal == Some(0),
-                &scroll,
-            ))
-            .child(line("Calendar", calendar.into_any_element()))
-            .child(line("", all_day.into_any_element()))
+            .child(line(IconName::Clock, when.into_any_element()))
+            .child(span)
+            .child(line(IconName::Calendar, calendar))
             .child(line(
-                if f.base.task { "Due" } else { "Starts" },
-                when(true, window, cx),
+                IconName::MapPin,
+                field(3, &f.location, "editor-location", window, cx).into_any_element(),
             ));
         if !f.base.task {
-            body = body.child(line("Ends", when(false, window, cx))).children(
-                (!length.is_empty()).then(|| {
-                    div()
-                        .pl(rems(4.7))
-                        .text_size(rems(0.68))
-                        .text_color(t.secondary)
-                        .child(length.clone())
-                }),
-            );
-        }
-        body = body.child(line(
-            "Location",
-            field(3, &f.location, "editor-location", window, cx).into_any_element(),
-        ));
-        if !f.base.task {
-            body = body.child(line("Meeting", meeting.into_any_element()));
+            body = body.child(line(IconName::Video, meeting.into_any_element()));
             if f.meeting == 1 {
                 body = body.child(line(
-                    "",
+                    IconName::Link,
                     field(4, &f.link, "editor-link", window, cx).into_any_element(),
                 ));
             } else if f.meeting == 2 {
                 body = body.child(line(
-                    "",
-                    div()
-                        .text_size(rems(0.7))
-                        .text_color(t.secondary)
-                        .whitespace_normal()
-                        .child("Google creates the Meet link when you save.")
-                        .into_any_element(),
-                ));
-            }
-        }
-        if google && !f.base.task {
-            body = body.child(line(
-                "Guests",
-                field(5, &f.guests, "editor-guests", window, cx).into_any_element(),
-            ));
-            if !f.guests.read(cx).value().is_empty() {
-                let target = cx.entity().downgrade();
-                body = body.child(line(
-                    "",
-                    switch("notify-guests", "Email guests", f.notify, cx)
-                        .debug_selector(|| "notify-guests".into())
-                        .disabled(busy)
-                        .on_change(move |checked, _, _, cx| {
-                            let _ = target.update(cx, |app, cx| {
-                                if let Some(f) = &mut app.editor {
-                                    f.notify = checked;
-                                }
-                                cx.notify();
-                            });
-                        })
-                        .into_any_element(),
+                    IconName::Video,
+                    note("Google creates the Meet link when you save."),
                 ));
             }
         }
         if f.base.series_id.is_some() {
-            body = body.child(
-                div()
-                    .flex()
-                    .gap(rems(0.5))
-                    .items_center()
-                    .text_size(rems(0.7))
-                    .text_color(t.secondary)
-                    .child(icon(IconName::Repeat).size(rems(0.8)))
-                    .child(if f.base.remote_id.is_some() {
-                        "Changes apply to this occurrence."
-                    } else {
-                        "Changes apply to the entire series."
-                    }),
-            );
+            body = body.child(line(
+                IconName::Repeat,
+                note(if f.base.remote_id.is_some() {
+                    "Changes apply to this occurrence."
+                } else {
+                    "Changes apply to the entire series."
+                }),
+            ));
         }
-        body = body.child(
-            button("more-details", "", ButtonVariant::Secondary, cx)
-                .debug_selector(|| "more-details".into())
-                .disabled(busy)
-                .mt(rems(0.3))
-                .h(rems(1.8))
-                .border_0()
-                .border_t_1()
-                .border_color(t.divider())
-                .justify_start()
-                .gap(rems(0.4))
-                .bg(t.foreground.opacity(0.))
-                .text_size(rems(0.62))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.secondary)
-                .child(
-                    icon(if f.details {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .size(rems(0.75)),
-                )
-                .child("MORE DETAILS")
-                .on_click(cx.listener(|app, _, _, cx| {
-                    if let Some(f) = &mut app.editor {
-                        f.details = !f.details;
-                    }
-                    cx.notify();
-                })),
-        );
         if f.details {
+            if google && !f.base.task {
+                body = body.child(line(
+                    IconName::Users,
+                    field(5, &f.guests, "editor-guests", window, cx).into_any_element(),
+                ));
+                if !f.guests.read(cx).value().is_empty() {
+                    let target = cx.entity().downgrade();
+                    body = body.child(
+                        div().pl(rems(2.)).pb(rems(0.25)).child(
+                            switch("notify-guests", "Email guests", f.notify, cx)
+                                .debug_selector(|| "notify-guests".into())
+                                .disabled(busy)
+                                .on_change(move |checked, _, _, cx| {
+                                    let _ = target.update(cx, |app, cx| {
+                                        if let Some(f) = &mut app.editor {
+                                            f.notify = checked;
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                    );
+                }
+            }
             if f.base.series_id.is_none() {
                 body = body.child(line(
-                    "Repeat",
+                    IconName::Repeat,
                     if busy {
                         div().into_any_element()
                     } else {
@@ -911,22 +913,35 @@ impl Ocal {
             }
             body = body
                 .child(line(
-                    "Time zone",
+                    IconName::Globe,
                     combobox("editor-timezone", &f.timezone, window, cx).into_any_element(),
                 ))
-                .child(reveal_field(
-                    textarea("editor-notes", &f.notes, window, cx)
-                        .debug_selector(|| "editor-notes".into())
-                        .disabled(busy)
-                        .w_full()
-                        .border_1()
-                        .border_color(t.divider())
-                        .bg(t.background),
-                    reveal == Some(9),
-                    &scroll,
-                ));
+                .child(
+                    div()
+                        .flex()
+                        .gap(rems(0.625))
+                        .px(rems(0.375))
+                        .pt(rems(0.5))
+                        .child(
+                            icon(IconName::TextAlignStart)
+                                .size(rems(1.))
+                                .mt(rems(0.25))
+                                .flex_shrink_0()
+                                .text_color(t.muted()),
+                        )
+                        .child(reveal_field(
+                            textarea("editor-notes", &f.notes, window, cx)
+                                .debug_selector(|| "editor-notes".into())
+                                .disabled(busy)
+                                .w_full()
+                                .border_0()
+                                .bg(clear),
+                            reveal == Some(9),
+                            &scroll,
+                        )),
+                );
         }
-        let title = match (f.editing, f.base.task) {
+        let label = match (f.editing, f.base.task) {
             (true, true) => "Edit task",
             (true, false) => "Edit event",
             (false, true) => "New task",
@@ -939,30 +954,35 @@ impl Ocal {
         } else {
             "Save"
         };
+        let untitled = f.title.read(cx).value().trim().is_empty();
         let error = self.editor_error.clone().filter(|_| !busy).map(|error| {
             div()
                 .debug_selector(|| "editor-error".into())
-                .px(rems(1.))
+                .mx(rems(1.125))
+                .mb(rems(0.5))
+                .px(rems(0.625))
                 .py(rems(0.5))
-                .border_t_1()
-                .border_color(t.danger.opacity(0.5))
+                .rounded(RADIUS_SMALL)
+                .bg(t.danger.opacity(0.08))
                 .text_color(t.danger)
-                .text_size(rems(0.72))
+                .text_size(rems(0.75))
                 .whitespace_normal()
                 .child(error)
         });
         let footer = if f.discard {
             div()
-                .p(rems(1.))
-                .border_t_1()
-                .border_color(t.divider())
                 .flex()
                 .items_center()
-                .gap(rems(0.5))
-                .child(div().flex_1().child("Discard unsaved changes?"))
+                .gap(rems(0.375))
                 .child(
-                    button("discard-editor", "Discard", ButtonVariant::Secondary, cx)
-                        .text_color(t.danger)
+                    div()
+                        .flex_1()
+                        .pl(rems(0.375))
+                        .child("Discard unsaved changes?"),
+                )
+                .child(
+                    mode_button("discard-editor", "Discard", None, cx)
+                        .hover(|s| s.bg(t.danger.opacity(0.1)).text_color(t.danger))
                         .on_click(cx.listener(|app, _, window, cx| {
                             app.editor = None;
                             app.selection.anchor = None;
@@ -972,7 +992,7 @@ impl Ocal {
                         })),
                 )
                 .child(
-                    button("keep-editing", "Keep editing", ButtonVariant::Primary, cx).on_click(
+                    send_button("keep-editing", "Keep editing", None, None, cx).on_click(
                         cx.listener(|app, _, _, cx| {
                             if let Some(f) = &mut app.editor {
                                 f.discard = false;
@@ -983,81 +1003,152 @@ impl Ocal {
                 )
         } else {
             div()
-                .px(rems(1.))
-                .h(rems(3.))
-                .border_t_1()
-                .border_color(t.divider())
                 .flex()
                 .items_center()
-                .gap(rems(0.4))
-                .text_size(rems(0.68))
-                .text_color(t.secondary)
-                .child(keycaps(["ctrl", "↵"], cx))
-                .child("save")
-                .child(div().w(rems(0.4)))
-                .child(keycaps(["esc"], cx))
-                .child("close")
+                .gap(rems(0.125))
+                .child(
+                    mode_button(
+                        "more-details",
+                        if f.details {
+                            "Fewer details"
+                        } else {
+                            "More details"
+                        },
+                        Some(IconName::TextAlignStart),
+                        cx,
+                    )
+                    .debug_selector(|| "more-details".into())
+                    .disabled(busy)
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        if let Some(f) = &mut app.editor {
+                            f.details = !f.details;
+                        }
+                        cx.notify();
+                    })),
+                )
                 .child(div().flex_1())
                 .child(
-                    button("save-event", save_label, ButtonVariant::Primary, cx)
-                        .debug_selector(|| "save-event".into())
+                    mode_button("cancel-editor", "Cancel", None, cx)
                         .disabled(busy)
+                        .on_click(cx.listener(|app, _, window, cx| app.close_editor(window, cx))),
+                )
+                .child(
+                    send_button("save-event", save_label, None, Some("ctrl ↵"), cx)
+                        .debug_selector(|| "save-event".into())
+                        .ml(rems(0.25))
+                        .disabled(busy)
+                        // Like Omail's Send: dimmed until there is something to save.
+                        .when(untitled, |b| b.opacity(0.45))
                         .on_click(cx.listener(|app, _, _, cx| app.save(cx))),
                 )
         };
-        focus_scope("event-editor")
+        let title = div()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(rems(0.5))
+            .pl(rems(0.75))
+            .pr(rems(0.625))
+            .pt(rems(0.75))
+            .pb(rems(0.25))
+            .child(
+                div().flex_1().min_w_0().child(reveal_field(
+                    input("editor-title", &f.title, window, cx)
+                        .debug_selector(|| "editor-title".into())
+                        .w_full()
+                        .border_0()
+                        .bg(clear)
+                        .text_size(rems(1.125))
+                        .font_weight(FontWeight::SEMIBOLD),
+                    reveal == Some(0),
+                    &scroll,
+                )),
+            )
+            .child(
+                tool_button("close-editor", IconName::X, "Close editor", "Esc", cx)
+                    .size(rems(1.75))
+                    .rounded(RADIUS_SMALL)
+                    .disabled(busy)
+                    .on_click(cx.listener(|app, _, window, cx| app.close_editor(window, cx))),
+            );
+        let card = focus_scope("event-editor")
             .debug_selector(|| "event-editor".into())
             .role(gpui_kit::Role::Dialog)
-            .aria_label(title)
+            .aria_label(label)
             .key_context("EventEditor")
             .track_focus(&f.focus)
             .absolute()
-            .right_0()
-            .top(rems(HEADER))
-            .bottom(rems(SHEET_GAP))
-            .w(if self.compact {
-                window.viewport_size().width
-            } else {
-                rems(26.).to_pixels(window.rem_size())
-            })
-            .max_w(window.viewport_size().width)
             .flex()
             .flex_col()
-            .border_l_1()
-            .border_color(t.control_border())
             .bg(t.background)
-            .shadow_lg()
             .occlude()
-            .child(
-                div()
-                    .px(rems(1.))
-                    .h(rems(2.6))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap(rems(0.5))
-                    .child(div().w(px(3.)).h(rems(1.1)).bg(color))
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(t.bright)
-                            .child(title),
-                    )
-                    .child(
-                        tool_button("close-editor", IconName::X, "Close editor", "Esc", cx)
-                            .disabled(busy)
-                            .on_click(
-                                cx.listener(|app, _, window, cx| app.close_editor(window, cx)),
-                            ),
-                    ),
-            )
+            .child(title)
             .child(body)
             .children(error)
-            .child(footer.flex_shrink_0())
+            .child(
+                footer
+                    .flex_shrink_0()
+                    .px(rems(0.5))
+                    .py(rems(0.5))
+                    .border_t_1()
+                    .border_color(t.hair())
+                    .text_size(rems(0.78))
+                    .text_color(t.muted()),
+            );
+        let viewport = window.viewport_size();
+        let rem = window.rem_size();
+        if self.compact {
+            return card
+                .left_0()
+                .right_0()
+                .top(rems(HEADER))
+                .bottom(rems(SHEET_GAP))
+                .border_b_1()
+                .border_color(t.hair())
+                .shadow(card_shadow(&t))
+                .into_any_element();
+        }
+        // A card centred over the sheet, just below its toolbar, ringed in the
+        // accent colour while a field has focus.
+        let gap = rems(SHEET_GAP).to_pixels(rem);
+        let sheet_left = if self.docked_sidebar(window) {
+            rems(SIDEBAR).to_pixels(rem)
+        } else {
+            gap
+        };
+        let sheet_right = viewport.width - gap;
+        let width = rems(COMPOSER_WIDTH)
+            .to_pixels(rem)
+            .min(sheet_right - sheet_left - gap * 2.);
+        let top = rems(SHEET_GAP + TOOLBAR + 0.375).to_pixels(rem);
+        let mut shadows = card_shadow(&t);
+        if focused.is_some() {
+            shadows.push(shadow(t.accent, 0., 0., 1.5));
+        }
+        card.left(sheet_left + (sheet_right - sheet_left - width) / 2.)
+            .top(top)
+            .w(width)
+            .max_h(viewport.height - top - gap * 2.)
+            .rounded(rems(0.875))
+            .shadow(shadows)
             .into_any_element()
     }
+    /// Calendars a draft can be saved to, in the order the calendar choice lists them.
+    pub(super) fn editor_calendars(&self, e: &Event) -> Vec<&ocal_core::Calendar> {
+        self.snapshot
+            .calendars
+            .iter()
+            .filter(|c| {
+                c.writable
+                    && (!e.task || c.account.is_none())
+                    && (e.remote_id.is_none() || c.id == e.calendar)
+            })
+            .collect()
+    }
 }
+
+/// Width of the floating composer.
+const COMPOSER_WIDTH: f32 = 30.;
 
 #[cfg(test)]
 mod tests {

@@ -11,7 +11,6 @@ pub const RADIUS_CONTROL: Rems = rems(0.5);
 /// The search field and the sidebar's New event button.
 pub const RADIUS_FIELD: Rems = rems(0.625);
 /// Floating cards, popovers and the Now card.
-#[allow(dead_code)]
 pub const RADIUS_CARD: Rems = rems(0.75);
 /// The raised content sheet.
 pub const RADIUS_SHEET: Rems = rems(0.75);
@@ -28,7 +27,6 @@ pub trait Tones {
     /// Hover and quiet control fills.
     fn hover(&self) -> Hsla;
     /// Weekend and off-hours wash: darker on dark themes, a faint ink on light ones.
-    #[allow(dead_code)]
     fn shade(&self) -> Hsla;
     fn dark(&self) -> bool;
 }
@@ -319,7 +317,6 @@ pub fn send_button(
 }
 
 /// A quiet text button with an optional icon, e.g. Edit and Duplicate in a card.
-#[allow(dead_code)]
 pub fn mode_button(
     id: impl Into<ElementId>,
     label: &'static str,
@@ -346,7 +343,6 @@ pub fn mode_button(
 }
 
 /// A calendar or label name in its colour on a soft tint of it.
-#[allow(dead_code)]
 pub fn label_chip(name: impl Into<SharedString>, color: Hsla) -> gpui_kit::Div {
     div()
         .flex_shrink_0()
@@ -363,7 +359,6 @@ pub fn label_chip(name: impl Into<SharedString>, color: Hsla) -> gpui_kit::Div {
 
 /// A round task checkbox in the calendar's colour: a hollow ring, or filled with a
 /// tick when done. Clicks on it should stop propagation so rows don't also open.
-#[allow(dead_code)]
 pub fn task_check(
     id: impl Into<ElementId>,
     color: Hsla,
@@ -466,7 +461,7 @@ pub fn tint(t: &Theme, color: Hsla, amount: f32) -> Hsla {
 pub fn event_text(t: &Theme, color: Hsla) -> Hsla {
     mix(t, color, 0.5, t.bright)
 }
-/// A day number, filled with the accent colour when it is today.
+/// A round day number, filled with the accent colour when it is today.
 pub fn day_number(
     day: u32,
     today: bool,
@@ -478,7 +473,8 @@ pub fn day_number(
     div()
         .min_w(badge)
         .h(badge)
-        .px(rems(0.3))
+        .px(rems(0.25))
+        .rounded_full()
         .flex()
         .items_center()
         .justify_center()
@@ -502,35 +498,6 @@ pub fn section_label(text: &'static str, cx: &App) -> gpui_kit::Div {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(cx.omarchy().secondary)
         .child(text)
-}
-
-/// A full-width list row; the active row gets the selection fill and an accent bar.
-pub fn nav_row(id: impl Into<ElementId>, active: bool, cx: &App) -> Button {
-    let t = cx.omarchy();
-    button(id, "", ButtonVariant::Secondary, cx)
-        .relative()
-        .w_full()
-        .h(rems(1.9))
-        .px(rems(0.75))
-        .gap(rems(0.6))
-        .justify_start()
-        .border_0()
-        .text_size(rems(0.78))
-        .bg(if active {
-            t.selection
-        } else {
-            t.foreground.opacity(0.)
-        })
-        .hover(|s| s.bg(t.hover_fill()))
-        .children(active.then(|| {
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(gpui_kit::px(2.))
-                .bg(t.accent)
-        }))
 }
 
 /// A square calendar colour swatch, outlined when the calendar is hidden.

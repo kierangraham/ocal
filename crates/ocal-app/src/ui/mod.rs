@@ -68,7 +68,8 @@ actions!(
         ZoomOut,
         ZoomReset,
         ToggleSidebar,
-        ShowActions
+        ShowActions,
+        DeleteEvent
     ]
 );
 pub fn bind_keys(cx: &mut App) {
@@ -91,6 +92,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("?", Shortcuts, normal),
         KeyBinding::new("ctrl-r", Sync, Some("Ocal")),
         KeyBinding::new("b", ToggleSidebar, normal),
+        KeyBinding::new("delete", DeleteEvent, normal),
+        KeyBinding::new("backspace", DeleteEvent, normal),
         KeyBinding::new("menu", ShowActions, normal),
         KeyBinding::new("shift-f10", ShowActions, normal),
         KeyBinding::new("ctrl-=", ZoomIn, Some("Ocal")),
@@ -232,14 +235,18 @@ pub struct Ocal {
     grid_bounds: HashMap<NaiveDate, Bounds<Pixels>>,
     /// Where each event was last drawn, by event ID, so its details card can sit
     /// beside it. Views record this with `anchor_event`.
-    #[allow(dead_code)]
     event_anchors: HashMap<String, Bounds<Pixels>>,
     dragging: bool,
     reveal_cursor: bool,
     zoom: f32,
     event_menu: bool,
     slot_menu: bool,
-    delete_confirm: bool,
+    /// Deleted events kept back until their Undo toast goes; views hide them.
+    pending_deletes: Vec<Event>,
+    /// The details card's guest list is expanded.
+    guests_open: bool,
+    /// Where the selected event was drawn when the details card was placed.
+    drawn_anchor: Option<Bounds<Pixels>>,
     display_zone: String,
     restore_focus: bool,
     month_cell_height: Pixels,
@@ -254,6 +261,11 @@ pub struct Ocal {
     view_override: bool,
     slot_anchor: f32,
 }
+/// Recurring occurrences share an ID, so anchors are keyed by ID and start.
+pub(super) fn anchor_key(e: &Event) -> String {
+    format!("{}@{}", e.id, e.start.timestamp())
+}
+
 impl Ocal {
     pub fn new(worker: Worker, demo: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search events"));
@@ -261,6 +273,18 @@ impl Ocal {
             cx.new(|cx| InputState::new(window, cx).placeholder("Name this calendar set"));
         cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify())
             .detach();
+        // Deletes still offering Undo go out on quit; give the worker a moment.
+        cx.on_app_quit(|app, cx| {
+            let waiting = !app.pending_deletes.is_empty();
+            app.flush_deletes();
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(if waiting {
+                    150
+                } else {
+                    0
+                }))
+        })
+        .detach();
         let events = worker.events;
         cx.spawn(async move |this, cx| {
             while let Ok(event) = events.recv().await {
@@ -347,7 +371,9 @@ impl Ocal {
             zoom: 1.,
             event_menu: false,
             slot_menu: false,
-            delete_confirm: false,
+            pending_deletes: Vec::new(),
+            guests_open: false,
+            drawn_anchor: None,
             display_zone,
             restore_focus: false,
             month_cell_height: px(100.),
@@ -535,13 +561,8 @@ impl Ocal {
                 self.restore_focus = true;
                 self.toast("Google Calendar connected", cx);
             }
-            WorkerEvent::Deleted => {
-                self.restore_focus = true;
-                self.selected = None;
-                self.delete_confirm = false;
-                self.busy = false;
-                self.toast("Event deleted", cx);
-            }
+            // The Undo toast already said so.
+            WorkerEvent::Deleted => self.busy = false,
         }
         cx.notify();
     }
@@ -706,6 +727,18 @@ impl Ocal {
                     .is_none_or(|s| s.calendars.iter().any(|c| c == calendar_id))
             })
     }
+    /// The sidebar sits beside the sheet rather than over it.
+    fn docked_sidebar(&self, window: &Window) -> bool {
+        self.layout(window).sidebar && !self.sidebar_hidden
+    }
+    fn calendar_name(&self, id: &str) -> String {
+        self.snapshot
+            .calendars
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default()
+    }
     fn calendar_color(&self, id: &str, cx: &App) -> gpui_kit::Hsla {
         let t = cx.omarchy();
         self.snapshot
@@ -735,6 +768,7 @@ impl Ocal {
             .events
             .iter()
             .filter(|e| visible.contains(e.calendar.as_str()))
+            .filter(|e| !self.pending_deletes.iter().any(|d| d.id == e.id))
             .filter(|e| {
                 query.is_empty() || matches(&e.title) || matches(&e.location) || matches(&e.notes)
             })
@@ -897,25 +931,64 @@ impl Ocal {
             return;
         }
         self.selected = Some(e);
-        self.delete_confirm = false;
+        self.guests_open = false;
         window.focus(&self.focus, cx);
         cx.notify();
     }
-    /// Record where `element` is drawn as the anchor for event `id`.
-    #[allow(dead_code)]
+    /// Record where `element` is drawn as the anchor for occurrence `e`.
     pub(super) fn anchor_event<E: gpui_kit::ParentElement>(
         &self,
         element: E,
-        id: &str,
+        e: &Event,
         cx: &Context<Self>,
     ) -> E {
         let target = cx.entity().downgrade();
-        let id = id.to_owned();
+        let key = anchor_key(e);
         element.on_prepaint(move |bounds, _, cx| {
-            let _ = target.update(cx, |app, _| {
-                app.event_anchors.insert(id, bounds);
+            let _ = target.update(cx, |app, cx| {
+                // The details card was placed from the last frame; move it if its
+                // event has moved since, e.g. after scrolling or a view change.
+                if app.selected.as_ref().is_some_and(|s| anchor_key(s) == key)
+                    && app.drawn_anchor != Some(bounds)
+                {
+                    cx.notify();
+                }
+                app.event_anchors.insert(key, bounds);
             });
         })
+    }
+    /// Delete at once with Undo. The command waits until the toast goes, so Undo
+    /// needs nothing from the worker; quitting sends whatever is still waiting.
+    pub(super) fn delete_event(&mut self, e: Event, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.event_menu = false;
+        self.restore_focus = true;
+        let id = e.id.clone();
+        let title = e.title.clone();
+        self.pending_deletes.push(e);
+        let undo = id.clone();
+        self.show_toast(
+            feedback::Toast::info(format!("Deleted “{title}”"))
+                .action("Undo", move |app, _, cx| {
+                    app.pending_deletes.retain(|d| d.id != undo);
+                    cx.notify();
+                })
+                .on_expire(move |app, cx| {
+                    if let Some(i) = app.pending_deletes.iter().position(|d| d.id == id) {
+                        let e = app.pending_deletes.remove(i);
+                        app.dispatch(Command::Delete(e));
+                        cx.notify();
+                    }
+                }),
+            cx,
+        );
+        cx.notify();
+    }
+    /// Send deletes still waiting on their Undo toast.
+    fn flush_deletes(&mut self) {
+        for e in std::mem::take(&mut self.pending_deletes) {
+            self.dispatch(Command::Delete(e));
+        }
     }
     /// Mark a task done or not done, wherever its checkbox is drawn.
     pub(super) fn toggle_task(&mut self, e: &Event, cx: &mut Context<Self>) {
@@ -948,6 +1021,7 @@ impl Ocal {
                 size,
                 cx,
             )
+            .debug_selector(|| "task-check".into())
             .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation()
             })
@@ -1004,11 +1078,7 @@ impl Ocal {
                 }
             }
             2 => self.duplicate(&e, window, cx),
-            3 => {
-                self.pick_event(e, window, cx);
-                self.delete_confirm = true;
-                cx.notify();
-            }
+            3 if self.writable(&e) => self.delete_event(e, cx),
             _ => (),
         }
     }
@@ -1061,6 +1131,13 @@ impl Render for Ocal {
             self.search_open = false;
         }
         let cursor_event = self.event_at_cursor(cx);
+        // Place the details card from where its event was last drawn, then let
+        // this frame's views record fresh positions.
+        self.drawn_anchor = self
+            .selected
+            .as_ref()
+            .and_then(|e| self.event_anchors.get(&anchor_key(e)).copied());
+        self.event_anchors.clear();
         let content = if self.settings {
             self.settings_view(window, cx)
         } else if self.help {
@@ -1143,6 +1220,14 @@ impl Render for Ocal {
                 }
             }))
             .on_action(cx.listener(|app, _: &Search, window, cx| app.open_search(window, cx)))
+            .on_action(cx.listener(|app, _: &DeleteEvent, _, cx| {
+                if app.editor.is_none()
+                    && let Some(e) = app.selected.clone()
+                    && app.writable(&e)
+                {
+                    app.delete_event(e, cx);
+                }
+            }))
             .on_action(cx.listener(|app, _: &Sync, _, cx| app.sync_now(cx)))
             .on_action(cx.listener(|app, _: &ZoomIn, _, cx| {
                 app.zoom = (app.zoom + 0.1).min(1.8);
@@ -1187,9 +1272,14 @@ impl Render for Ocal {
                         && !app.settings
                         && !app.help
                     {
-                        if let Some(e) = app.event_at_cursor(cx) {
+                        // With details open, Enter edits; otherwise it opens or adds.
+                        if let Some(e) = app.selected.clone() {
+                            if app.writable(&e) {
+                                app.open_editor(e, true, window, cx);
+                            }
+                        } else if let Some(e) = app.event_at_cursor(cx) {
                             app.pick_event(e, window, cx);
-                        } else if app.selected.is_none() {
+                        } else {
                             app.new_event(false, window, cx);
                         }
                     }
@@ -1253,7 +1343,7 @@ impl Render for Ocal {
             );
         }
         if self.selected.is_some() {
-            root = root.child(self.details(window, cx));
+            root = root.child(self.details(self.drawn_anchor, docked, window, cx));
         }
         if self.editor.is_some() {
             root = root.child(self.editor_view(window, cx));

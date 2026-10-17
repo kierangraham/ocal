@@ -725,7 +725,8 @@ fn calendar_columns_fill_the_available_area(cx: &mut TestAppContext) {
     let first = cx.debug_bounds("month-day-0").unwrap();
     let last = cx.debug_bounds("month-day-41").unwrap();
     assert!(first.size.width > px(150.) && first.size.height > px(100.));
-    assert!((last.right() - sheet.right()).abs() < px(2.));
+    // The month keeps a small margin inside the sheet.
+    assert!(last.right() <= sheet.right() && sheet.right() - last.right() < px(14.));
     assert!(last.bottom() > px(890.) && last.bottom() <= sheet.bottom() + px(1.));
 }
 
@@ -1485,4 +1486,178 @@ fn icon_buttons_explain_themselves_with_lower_case_keys(cx: &mut TestAppContext)
     cx.run_until_parked();
     draw(cx);
     assert!(cx.debug_bounds("tooltip").is_some());
+}
+
+fn demo_event(view: &Entity<Ocal>, cx: &mut VisualTestContext, title: &str) -> Event {
+    view.read_with(cx, |app, cx| {
+        let week = week_start(app.date);
+        app.events(week, week + Duration::days(7), cx)
+            .into_iter()
+            .find(|e| e.title == title)
+            .unwrap()
+    })
+}
+
+fn open_details(view: &Entity<Ocal>, cx: &mut VisualTestContext, e: Event) {
+    cx.update(|window, cx| view.update(cx, |app, cx| app.pick_event(e, window, cx)));
+    // Views record where the event is drawn; the card follows on the next frame.
+    draw(cx);
+    cx.run_until_parked();
+    draw(cx);
+}
+
+#[gpui_kit::test]
+fn deleting_hides_at_once_offers_undo_and_sends_after_the_toast(cx: &mut TestAppContext) {
+    use std::time::Duration;
+    let (view, cx, commands) = fixture(cx);
+    while commands.try_recv().is_ok() {}
+    let shown = |view: &Entity<Ocal>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, cx| {
+            let week = week_start(app.date);
+            app.events(week, week + chrono::Duration::days(7), cx)
+                .iter()
+                .any(|e| e.title == "Deep work")
+        })
+    };
+    let e = demo_event(&view, cx, "Deep work");
+    open_details(&view, cx, e);
+    let delete = cx.debug_bounds("delete-event").unwrap().center();
+    cx.simulate_click(delete, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.selected.is_none()));
+    assert!(!shown(&view, cx));
+    assert!(commands.try_recv().is_err());
+    // Undo brings it back without telling the worker anything.
+    let undo = cx.debug_bounds("toast-action").unwrap().center();
+    cx.simulate_click(undo, Default::default());
+    draw(cx);
+    assert!(shown(&view, cx));
+    assert!(commands.try_recv().is_err());
+    // The Delete key does the same; once the toast goes, the delete is sent.
+    let e = demo_event(&view, cx, "Deep work");
+    open_details(&view, cx, e);
+    cx.simulate_keystrokes("delete");
+    draw(cx);
+    assert!(!shown(&view, cx));
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    assert!(
+        commands
+            .try_iter()
+            .any(|c| matches!(c, Command::Delete(e) if e.title == "Deep work"))
+    );
+}
+
+#[gpui_kit::test]
+fn enter_edits_the_event_whose_details_are_open(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    let e = demo_event(&view, cx, "Deep work");
+    open_details(&view, cx, e);
+    assert!(view.read_with(cx, |app, _| app.editor.is_none()));
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    view.read_with(cx, |app, cx| {
+        let f = app.editor.as_ref().unwrap();
+        assert_eq!(f.title.read(cx).value().as_ref(), "Deep work");
+    });
+}
+
+#[gpui_kit::test]
+fn details_sit_beside_the_event_and_flip_near_the_right_edge(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    for (title, right_of_event) in [("Deep work", true), ("Coastal walk", false)] {
+        let e = demo_event(&view, cx, title);
+        open_details(&view, cx, e.clone());
+        let event = view.read_with(cx, |app, _| app.event_anchors[&anchor_key(&e)]);
+        let card = cx.debug_bounds("event-details").unwrap();
+        if right_of_event {
+            assert!(card.left() >= event.right(), "{title}: {card:?} {event:?}");
+        } else {
+            assert!(card.right() <= event.left(), "{title}: {card:?} {event:?}");
+        }
+        assert!(
+            (card.top() - (event.top() - px(8.))).abs() < px(2.),
+            "{title}"
+        );
+        let sheet = cx.debug_bounds("sheet").unwrap();
+        assert!(card.right() <= sheet.right() && card.bottom() <= sheet.bottom());
+    }
+    // Compact windows use a full-width panel instead.
+    cx.simulate_resize(size(px(520.), px(800.)));
+    draw(cx);
+    let card = cx.debug_bounds("event-details").unwrap();
+    assert!(card.size.width >= px(519.));
+}
+
+#[gpui_kit::test]
+fn the_composer_floats_over_the_sheet_with_calendar_tabs(cx: &mut TestAppContext) {
+    let (view, cx, _commands) = fixture(cx);
+    cx.simulate_keystrokes("c");
+    draw(cx);
+    let card = cx.debug_bounds("event-editor").unwrap();
+    let sheet = cx.debug_bounds("sheet").unwrap();
+    assert!((card.center().x - sheet.center().x).abs() < px(2.));
+    assert!(card.top() > sheet.top() && card.size.width < sheet.size.width / 2.);
+    // Few calendars are offered as tabs, which drive the calendar choice.
+    let second = cx.debug_bounds("calendar-choice-1").unwrap().center();
+    cx.simulate_click(second, Default::default());
+    draw(cx);
+    let chosen = view.read_with(cx, |app, cx| {
+        let f = app.editor.as_ref().unwrap();
+        f.calendar.read(cx).selected().unwrap().value.to_string()
+    });
+    let expected = view.read_with(cx, |app, _| {
+        let e = &app.editor.as_ref().unwrap().base;
+        app.editor_calendars(e)[1].id.clone()
+    });
+    assert_eq!(chosen, expected);
+    // Repeat, time zone and notes wait behind More details.
+    assert!(cx.debug_bounds("editor-notes").is_none());
+    let more = cx.debug_bounds("more-details").unwrap().center();
+    cx.simulate_click(more, Default::default());
+    draw(cx);
+    assert!(cx.debug_bounds("editor-notes").is_some());
+}
+
+#[gpui_kit::test]
+fn tasks_show_in_month_and_agenda_and_dates_open_the_day(cx: &mut TestAppContext) {
+    let (view, cx, commands) = fixture(cx);
+    while commands.try_recv().is_ok() {}
+    cx.simulate_keystrokes("3");
+    draw(cx);
+    cx.run_until_parked();
+    draw(cx);
+    // The demo's task is due on the fixture date, with a working checkbox.
+    assert!(cx.debug_bounds("task-check").is_some());
+    let task = view.read_with(cx, |app, cx| {
+        app.events(app.date, app.date + Duration::days(1), cx)
+            .into_iter()
+            .find(|e| e.task)
+            .unwrap()
+    });
+    view.update(cx, |app, cx| app.toggle_task(&task, cx));
+    assert!(commands.try_iter().any(
+        |c| matches!(c, Command::Save { event, .. } if event.id == task.id && event.completed)
+    ));
+    // Agenda lists the task too.
+    cx.simulate_keystrokes("4");
+    draw(cx);
+    assert!(view.read_with(cx, |app, cx| {
+        app.events(app.date, app.date + Duration::days(60), cx)
+            .iter()
+            .any(|e| e.task)
+    }));
+    // A month date opens that day.
+    cx.simulate_keystrokes("3");
+    draw(cx);
+    let date = cx.debug_bounds("month-day-17").unwrap();
+    cx.simulate_click(
+        point(date.left() + px(14.), date.top() + px(14.)),
+        Default::default(),
+    );
+    draw(cx);
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.view, View::Day);
+        assert_eq!(app.date, month_days(app.date)[17]);
+    });
 }

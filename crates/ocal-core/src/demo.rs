@@ -57,6 +57,19 @@ pub fn seed(store: &Store, today: NaiveDate) -> Result<()> {
         if title == "Team stand-up" {
             e.link = "https://meet.google.com/abc-defg-hij".into();
             e.notes = "A short check-in: progress, plans, and anything in the way.".into();
+            e.attendees = [
+                ("you@example.com", "accepted", true),
+                ("maya@example.com", "accepted", false),
+                ("oliver@example.com", "accepted", false),
+                ("sam@example.com", "needsAction", false),
+            ]
+            .into_iter()
+            .map(|(email, response, me)| Attendee {
+                email: email.into(),
+                response: response.into(),
+                me,
+            })
+            .collect();
         }
         store.save_event(&e)?;
     }
@@ -65,6 +78,24 @@ pub fn seed(store: &Store, today: NaiveDate) -> Result<()> {
     task.task = true;
     task.busy = false;
     store.save_event(&task)?;
+    // A few more tasks around the week, one already done, so tasks show in every view.
+    for (day, title, done) in [
+        (3, "Renew passport", true),
+        (7, "Book train tickets", false),
+        (11, "Send invoice", false),
+    ] {
+        let mut task = Event::new("local-tasks", monday + Duration::days(day), "Europe/London")?;
+        task.title = title.into();
+        task.task = true;
+        task.busy = false;
+        task.completed = done;
+        store.save_event(&task)?;
+    }
+    let birthday = monday + Duration::days(10);
+    let mut all = Event::new("local-personal", birthday, "Europe/London")?;
+    all.title = "Mum’s birthday".into();
+    all.all_day = Some((birthday, birthday + Duration::days(1)));
+    store.save_event(&all)?;
     let mut all = Event::new(
         "local-personal",
         monday + Duration::days(2),

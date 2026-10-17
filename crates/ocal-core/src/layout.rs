@@ -91,10 +91,15 @@ pub struct Placement {
     pub index: usize,
     pub column: usize,
     pub columns: usize,
+    /// Width in lanes. Every lane but the last reaches up to 1.7 lanes into its
+    /// neighbour, so earlier titles keep room; later lanes are drawn on top.
+    pub span: f32,
     pub start: f32,
     pub end: f32,
 }
-/// Assign equal-width lanes per connected overlap group; touching events don't overlap.
+/// How far an overlapped event reaches under its right-hand neighbours.
+const CASCADE: f32 = 1.7;
+/// Assign lanes per connected overlap group; touching events don't overlap.
 pub fn lanes(intervals: &[(f32, f32)]) -> Vec<Placement> {
     let mut order: Vec<_> = (0..intervals.len()).collect();
     order.sort_by(|&a, &b| {
@@ -128,6 +133,7 @@ pub fn lanes(intervals: &[(f32, f32)]) -> Vec<Placement> {
             index,
             column,
             columns: 0,
+            span: 1.,
             start,
             end,
         });
@@ -139,6 +145,11 @@ pub fn lanes(intervals: &[(f32, f32)]) -> Vec<Placement> {
 fn finish_group(out: &mut Vec<Placement>, group: &mut Vec<Placement>, columns: usize) {
     for mut p in group.drain(..) {
         p.columns = columns;
+        p.span = if p.column + 1 == columns {
+            1.
+        } else {
+            CASCADE.min((columns - p.column) as f32)
+        };
         out.push(p)
     }
 }
@@ -151,6 +162,22 @@ mod tests {
         assert_eq!(
             p.iter().map(|p| (p.column, p.columns)).collect::<Vec<_>>(),
             vec![(0, 2), (1, 2), (0, 2), (0, 1)]
+        );
+        assert_eq!(
+            p.iter().map(|p| p.span).collect::<Vec<_>>(),
+            vec![1.7, 1., 1.7, 1.]
+        );
+    }
+    #[test]
+    fn cascade_never_reaches_past_the_group() {
+        let p = lanes(&[(9., 12.), (9.5, 12.), (10., 12.)]);
+        assert_eq!(
+            p.iter().map(|p| (p.column, p.span)).collect::<Vec<_>>(),
+            vec![(0, 1.7), (1, 1.7), (2, 1.)]
+        );
+        assert!(
+            p.iter()
+                .all(|p| p.column as f32 + p.span <= p.columns as f32)
         );
     }
     #[test]

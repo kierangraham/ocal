@@ -40,7 +40,10 @@ gpui_kit::assets::icon_assets!(
         CircleAlert,
         Sun,
         Moon,
-        Minus
+        Minus,
+        ChevronUp,
+        Users,
+        TextAlignStart
     ]
 );
 pub struct Assets;
