@@ -37,6 +37,9 @@ gpui_kit::assets::icon_assets!(
         Layers,
         CircleCheck,
         CircleX,
+        CircleAlert,
+        Sun,
+        Moon,
         Minus
     ]
 );

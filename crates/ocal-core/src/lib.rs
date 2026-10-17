@@ -8,5 +8,5 @@ pub mod selection;
 pub mod service;
 pub mod store;
 pub use model::*;
-pub use service::Service;
+pub use service::{Service, SyncState};
 pub use store::Store;

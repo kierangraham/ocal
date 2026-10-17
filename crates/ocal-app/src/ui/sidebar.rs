@@ -1,8 +1,8 @@
 //! Mini month, calendar list and upcoming events.
 use super::*;
 use crate::appearance::{
-    RADIUS_CONTROL, RADIUS_FIELD, accent_glow, nav_row, section_label, send_button, swatch,
-    with_tip,
+    RADIUS_CONTROL, RADIUS_FIELD, RADIUS_SMALL, Tones, accent_glow, nav_row, section_label,
+    send_button, shadow, swatch, with_tip,
 };
 use gpui_kit::{linear_color_stop, linear_gradient};
 
@@ -15,7 +15,8 @@ impl Ocal {
         let tz = self.tz();
         // One expansion for the whole grid marks the days that have events.
         let mut busy = HashSet::new();
-        for e in self.events(days[0], days[41] + Duration::days(1), cx) {
+        let events = self.events(days[0], days[41] + Duration::days(1), cx);
+        for e in events.into_iter().filter(|e| !e.completed) {
             let (mut d, end) = e.dates_in(tz);
             while d < end && d <= days[41] {
                 busy.insert(d);
@@ -246,7 +247,7 @@ impl Ocal {
         let upcoming: Vec<_> = self
             .events(today, today + Duration::days(7), cx)
             .into_iter()
-            .filter(|e| !e.task && e.end > now)
+            .filter(|e| !e.task && !e.completed && e.end > now)
             .take(8)
             .collect();
         let mut list = div().pb(rems(0.6)).child(section_label("UP NEXT", cx));
@@ -402,7 +403,6 @@ impl Ocal {
             .into_any_element()
     }
     pub(super) fn sidebar(&self, overlay: bool, cx: &mut Context<Self>) -> AnyElement {
-        let t = cx.omarchy().clone();
         div()
             .debug_selector(|| "sidebar".into())
             .w(rems(SIDEBAR))
@@ -422,43 +422,93 @@ impl Ocal {
                     .child(self.calendar_list(cx))
                     .child(self.up_next(cx)),
             )
+            .child(self.footer(cx))
+            .into_any_element()
+    }
+
+    /// The footer's sync line: what to say, and the dot's colour.
+    pub(super) fn sync_status(&self, cx: &App) -> (String, gpui_kit::Hsla) {
+        let t = cx.omarchy();
+        let signing_in = self.busy && self.account_note.as_ref().is_some_and(|(_, e)| !e);
+        if self.demo {
+            ("Demo calendar".into(), t.muted())
+        } else if signing_in {
+            ("Signing in…".into(), t.accent)
+        } else if self.snapshot.accounts.is_empty() {
+            ("On this computer".into(), t.muted())
+        } else if self.sync.syncing {
+            ("Syncing…".into(), t.accent)
+        } else if self.sync.offline {
+            ("Offline".into(), t.muted())
+        } else if self.sync.error.is_some() {
+            ("Sync failed".into(), t.danger)
+        } else if let Some(synced) = self.sync.synced_label(Utc::now()) {
+            (synced, t.success)
+        } else {
+            ("Not synced yet".into(), t.muted())
+        }
+    }
+
+    /// Sync status, the light/dark toggle and Settings, like Omail's footer.
+    fn footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = cx.omarchy().clone();
+        let (text, color) = self.sync_status(cx);
+        // A failure explains itself on hover.
+        let detail = self
+            .sync
+            .error
+            .clone()
+            .filter(|_| !self.demo && !self.sync.syncing && !self.snapshot.accounts.is_empty());
+        let status = div()
+            .id("sync-status")
+            .debug_selector(|| "sync-status".into())
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(rems(0.5))
             .child(
                 div()
-                    .border_t_1()
-                    .border_color(t.divider())
-                    .px(rems(0.5))
-                    .h(rems(2.6))
+                    .size(rems(0.375))
                     .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        action_button(
-                            "settings",
-                            IconName::Settings,
-                            "Settings",
-                            ButtonVariant::Secondary,
-                            cx,
-                        )
-                        .border_0()
-                        .bg(t.foreground.opacity(0.))
-                        .on_click(cx.listener(|app, _, window, cx| app.show_settings(window, cx))),
-                    )
-                    .child(
-                        tool_button(
-                            "help",
-                            IconName::CircleQuestionMark,
-                            "Keyboard shortcuts",
-                            "?",
-                            cx,
-                        )
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.help = true;
-                            app.settings = false;
-                            cx.notify();
-                        })),
-                    ),
+                    .rounded_full()
+                    .bg(color)
+                    .shadow(vec![shadow(color.opacity(0.18), 0., 0., 3.)]),
             )
+            .child(div().min_w_0().text_ellipsis().child(text));
+        let status = match detail {
+            Some(detail) => with_tip(status, detail),
+            None => status,
+        };
+        let dark = t.dark();
+        let small = |b: gpui_omarchy::Button| b.size(rems(1.75)).rounded(RADIUS_SMALL);
+        div()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(rems(0.25))
+            .pl(rems(1.125))
+            .pr(rems(0.875))
+            .pt(rems(0.5))
+            .pb(rems(0.75))
+            .whitespace_nowrap()
+            .text_size(rems(0.75))
+            .text_color(t.muted())
+            .child(status)
+            .child(small(
+                tool_button(
+                    "appearance-toggle",
+                    if dark { IconName::Sun } else { IconName::Moon },
+                    if dark { "Light mode" } else { "Dark mode" },
+                    "",
+                    cx,
+                )
+                .on_click(cx.listener(|app, _, _, cx| app.toggle_appearance(cx))),
+            ))
+            .child(small(
+                tool_button("settings", IconName::Settings, "Settings", "", cx)
+                    .on_click(cx.listener(|app, _, window, cx| app.show_settings(window, cx))),
+            ))
             .into_any_element()
     }
 }

@@ -1,6 +1,6 @@
 use crate::*;
 use anyhow::{Context, Result, ensure};
-use chrono::{Duration, NaiveDate};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 pub struct Service {
     pub store: Store,
     pub demo: bool,
@@ -112,10 +112,16 @@ impl Service {
 /// Report failing accounts after every account has had a chance to update its cache.
 fn sync_accounts(accounts: &[Account], mut sync: impl FnMut(&Account) -> Result<()>) -> Result<()> {
     let mut failures = Vec::new();
+    let mut offline = true;
     for account in accounts {
         if let Err(error) = sync(account) {
+            offline &= is_offline(&error);
             failures.push(format!("{}: {error:#}", account.id));
         }
+    }
+    // The per-account text would hide that the network, not an account, failed.
+    if !failures.is_empty() && offline {
+        return Err(Offline.into());
     }
     ensure!(
         failures.is_empty(),
@@ -123,6 +129,64 @@ fn sync_accounts(accounts: &[Account], mut sync: impl FnMut(&Account) -> Result<
         failures.join("\n")
     );
     Ok(())
+}
+
+/// Google could not be reached at all.
+#[derive(Debug)]
+pub struct Offline;
+impl std::fmt::Display for Offline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Google Calendar can’t be reached. Check your connection")
+    }
+}
+impl std::error::Error for Offline {}
+
+/// Whether an error means there is no connection, rather than a problem with an account.
+pub fn is_offline(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<Offline>()
+            || cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(|e| e.is_connect() || e.is_timeout())
+    })
+}
+
+/// How syncing with Google is going, for the sidebar footer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SyncState {
+    pub syncing: bool,
+    /// When a sync last finished without errors.
+    pub last: Option<DateTime<Utc>>,
+    /// Why the latest sync failed; the next good one clears it.
+    pub error: Option<String>,
+    /// The latest failure was a missing connection.
+    pub offline: bool,
+}
+impl SyncState {
+    pub fn finish(&mut self, result: &Result<()>, now: DateTime<Utc>) {
+        self.syncing = false;
+        match result {
+            Ok(()) => {
+                self.last = Some(now);
+                self.error = None;
+                self.offline = false;
+            }
+            Err(error) => {
+                self.error = Some(format!("{error:#}"));
+                self.offline = is_offline(error);
+            }
+        }
+    }
+    /// "Synced just now", "Synced 3 min ago", "Synced 2 h ago" or "Synced 4 d ago".
+    pub fn synced_label(&self, now: DateTime<Utc>) -> Option<String> {
+        let minutes = (now - self.last?).num_minutes().max(0);
+        Some(match minutes {
+            0 => "Synced just now".into(),
+            1..60 => format!("Synced {minutes} min ago"),
+            60..1440 => format!("Synced {} h ago", minutes / 60),
+            _ => format!("Synced {} d ago", minutes / 1440),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -164,5 +228,36 @@ mod tests {
         assert!(!error.contains("first@example.com:"));
         assert!(!error.contains("last@example.com:"));
         assert!(sync_accounts(&accounts, |_| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn unreachable_google_reads_as_offline_and_a_good_sync_clears_it() {
+        let accounts = [Account {
+            id: "me@example.com".into(),
+            name: "me@example.com".into(),
+        }];
+        // Nothing listens on the discard port, so the connection is refused.
+        let refused = || -> Result<()> {
+            reqwest::blocking::get("http://127.0.0.1:9").context("Loading calendars")?;
+            Ok(())
+        };
+        let error = sync_accounts(&accounts, |_| refused()).unwrap_err();
+        assert!(is_offline(&error));
+        assert!(!is_offline(&anyhow::anyhow!("Reconnect this account")));
+        let now = Utc::now();
+        let mut state = SyncState {
+            syncing: true,
+            ..Default::default()
+        };
+        state.finish(&Err(error), now);
+        assert!(!state.syncing && state.offline && state.error.is_some());
+        assert_eq!(state.synced_label(now), None);
+        state.finish(&Ok(()), now);
+        assert!(!state.offline && state.error.is_none());
+        let label = |minutes| state.synced_label(now + Duration::minutes(minutes));
+        assert_eq!(label(0).as_deref(), Some("Synced just now"));
+        assert_eq!(label(3).as_deref(), Some("Synced 3 min ago"));
+        assert_eq!(label(150).as_deref(), Some("Synced 2 h ago"));
+        assert_eq!(label(3000).as_deref(), Some("Synced 2 d ago"));
     }
 }

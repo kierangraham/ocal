@@ -2,6 +2,7 @@ mod agenda;
 mod chrome;
 mod details;
 mod editor;
+mod feedback;
 mod grid;
 mod month;
 mod settings;
@@ -11,7 +12,7 @@ mod tests;
 
 use crate::{
     appearance::{
-        RADIUS_SHEET, action_button, card_shadow, day_number, event_text, reveal_field,
+        Appearance, RADIUS_SHEET, action_button, card_shadow, day_number, event_text, reveal_field,
         sheet_shadow, tint, tool_button,
     },
     menus::{ContextTarget, menu},
@@ -33,7 +34,7 @@ use gpui_omarchy::{
     icon, input, select, textarea,
 };
 use ocal_core::{
-    CalendarSet, Event, Repeat, Snapshot, local_datetime, month_days, move_month,
+    CalendarSet, Event, Repeat, Snapshot, SyncState, local_datetime, month_days, move_month,
     selection::{Selection, Slot},
     system_zone, week_start, zone,
 };
@@ -61,7 +62,7 @@ actions!(
         Search,
         Save,
         Escape,
-        Help,
+        Shortcuts,
         Sync,
         ZoomIn,
         ZoomOut,
@@ -87,7 +88,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-f", Search, Some("Ocal")),
         KeyBinding::new("ctrl-enter", Save, Some("Ocal")),
         KeyBinding::new("escape", Escape, Some("Ocal")),
-        KeyBinding::new("?", Help, normal),
+        KeyBinding::new("?", Shortcuts, normal),
         KeyBinding::new("ctrl-r", Sync, Some("Ocal")),
         KeyBinding::new("b", ToggleSidebar, normal),
         KeyBinding::new("menu", ShowActions, normal),
@@ -151,7 +152,6 @@ const SHEET_GAP: f32 = 0.5;
 const TOOLBAR: f32 = 3.5;
 /// Docked panels start below the sheet's toolbar.
 const HEADER: f32 = SHEET_GAP + TOOLBAR;
-const STATUS: f32 = 1.7;
 /// IANA zones for pickers: `lead` first, then every regional zone, then UTC.
 fn zone_names(lead: &[String]) -> Vec<String> {
     let mut zones = lead.to_vec();
@@ -197,8 +197,20 @@ pub struct Ocal {
     editor: Option<Editor>,
     search: Entity<InputState>,
     set_name: Entity<InputState>,
-    status: String,
-    error: bool,
+    toasts: Vec<feedback::Toast>,
+    next_toast: usize,
+    /// Why the editor could not save, shown inside it.
+    editor_error: Option<String>,
+    /// Sign-in progress, or why it failed (`true`), shown under the account buttons.
+    account_note: Option<(String, bool)>,
+    sync: SyncState,
+    /// The user asked for a sync: `false` until it starts, then `true` until it ends.
+    manual_sync: Option<bool>,
+    /// A saved event whose Google Meet link is still being generated.
+    meet_pending: Option<String>,
+    /// The `?` shortcuts card.
+    keys_open: bool,
+    appearance: Appearance,
     busy: bool,
     settings: bool,
     advanced_login: bool,
@@ -299,12 +311,15 @@ impl Ocal {
             editor: None,
             search,
             set_name,
-            status: if demo {
-                "Demo calendar · changes stay in this session".into()
-            } else {
-                "Your calendar, at your pace".into()
-            },
-            error: false,
+            toasts: Vec::new(),
+            next_toast: 0,
+            editor_error: None,
+            account_note: None,
+            sync: SyncState::default(),
+            manual_sync: None,
+            meet_pending: None,
+            keys_open: false,
+            appearance: Appearance::System,
             busy: false,
             settings: false,
             advanced_login: false,
@@ -381,18 +396,39 @@ impl Ocal {
                     {
                         self.zoom = zoom.clamp(0.7, 1.8);
                     }
+                    static FEEDBACK: AtomicBool = AtomicBool::new(false);
+                    if !FEEDBACK.swap(true, Ordering::Relaxed) {
+                        if let Some(appearance) = std::env::var("OCAL_DEBUG_APPEARANCE")
+                            .ok()
+                            .and_then(|a| Appearance::parse(&a))
+                        {
+                            self.set_appearance(appearance, cx);
+                        }
+                        // An Undo toast for that title, kept for the capture.
+                        if let Ok(title) = std::env::var("OCAL_DEBUG_TOAST") {
+                            self.show_toast(
+                                feedback::Toast::info(format!("Deleted “{title}”"))
+                                    .action("Undo", |_, _, _| ())
+                                    .sticky(),
+                                cx,
+                            );
+                        }
+                        self.keys_open = std::env::var_os("OCAL_DEBUG_KEYS").is_some();
+                    }
                 }
-                if self.status == "Saved · Generating Google Meet…"
-                    && let Some(selected) = &self.selected
-                    && let Some(updated) = self.snapshot.events.iter().find(|e| e.id == selected.id)
+                if let Some(id) = &self.meet_pending
+                    && let Some(updated) = self.snapshot.events.iter().find(|e| &e.id == id)
                     && updated.conference_status != "pending"
                 {
-                    self.status = if !updated.link.is_empty() {
-                        "Saved · Google Meet is ready"
+                    self.meet_pending = None;
+                    if updated.link.is_empty() {
+                        self.toast_error(
+                            "Google could not generate a meeting link; edit the event to retry",
+                            cx,
+                        );
                     } else {
-                        "Google could not generate a meeting link; edit the event to retry"
+                        self.toast("Google Meet is ready", cx);
                     }
-                    .into();
                 }
                 if let Some(e) = &self.selected {
                     if let Some(updated) = self.snapshot.events.iter().find(|x| x.id == e.id) {
@@ -404,72 +440,114 @@ impl Ocal {
                     }
                 }
             }
+            WorkerEvent::Sync(state) => {
+                match (self.manual_sync, state.syncing) {
+                    (Some(false), true) => self.manual_sync = Some(true),
+                    // A sync the user asked for reports back; the footer covers the rest.
+                    (Some(true), false) => {
+                        self.manual_sync = None;
+                        match &state.error {
+                            Some(error) => {
+                                self.toast_error(error.clone(), cx);
+                            }
+                            None => {
+                                let message = if self.demo {
+                                    "Demo calendar refreshed"
+                                } else if self.snapshot.accounts.is_empty() {
+                                    "Local calendars are up to date"
+                                } else {
+                                    "Google calendars synced"
+                                };
+                                self.toast(message, cx);
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+                self.sync = state;
+            }
             WorkerEvent::SignInReady(url) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
                 self.sign_in_url = Some(url);
                 self.busy = true;
-                self.error = false;
-                self.status =
-                    "Sign-in link copied · Paste it into your preferred browser profile".into();
+                self.account_note = Some((
+                    "Sign-in link copied · Paste it into your preferred browser profile".into(),
+                    false,
+                ));
             }
             WorkerEvent::Progress(s) => {
                 self.sign_in_url = None;
-                self.status = s;
-                self.error = false;
+                self.account_note = Some((s, false));
             }
             WorkerEvent::Status(s) => {
                 self.sign_in_url = None;
-                self.status = s;
-                self.error = false;
+                self.account_note = None;
                 self.busy = false;
+                self.toast(s, cx);
             }
             WorkerEvent::Error(s) => {
+                let signing_in = self.busy && matches!(self.account_note, Some((_, false)));
                 self.sign_in_url = None;
-                self.status = s;
-                self.error = true;
                 self.busy = false;
                 if let Some(f) = &self.editor {
                     f.set_disabled(false, cx);
+                    self.editor_error = Some(s);
+                } else if signing_in {
+                    // A failed sign-in stays beside the account buttons.
+                    self.account_note = Some((s.clone(), true));
+                    if !self.settings {
+                        self.toast_error(s, cx);
+                    }
+                } else {
+                    self.toast_error(s, cx);
                 }
             }
             WorkerEvent::Saved(saved) => {
                 self.restore_focus = true;
                 self.editor = None;
-                self.selected = Some(*saved);
+                self.editor_error = None;
                 self.busy = false;
-                self.status = if self
-                    .selected
-                    .as_ref()
-                    .is_some_and(|e| e.conference_status == "pending")
-                {
-                    "Saved · Generating Google Meet…".into()
-                } else {
-                    "Saved".into()
-                };
-                self.error = false;
+                let calendar = self
+                    .snapshot
+                    .calendars
+                    .iter()
+                    .find(|c| c.id == saved.calendar)
+                    .map(|c| c.name.clone());
+                let mut message = calendar.map_or("Saved".into(), |c| format!("Saved to {c}"));
+                if saved.conference_status == "pending" {
+                    self.meet_pending = Some(saved.id.clone());
+                    message.push_str(" · Generating Google Meet…");
+                }
+                self.selected = Some(*saved);
+                self.toast(message, cx);
             }
             WorkerEvent::Connected => {
                 self.sign_in_url = None;
                 self.settings = false;
                 self.busy = false;
-                self.error = false;
+                self.account_note = None;
                 self.active_set = None;
                 self.restore_focus = true;
-                self.status = "Google Calendar connected".into();
+                self.toast("Google Calendar connected", cx);
             }
             WorkerEvent::Deleted => {
                 self.restore_focus = true;
                 self.selected = None;
                 self.delete_confirm = false;
                 self.busy = false;
-                self.status = "Event deleted".into();
-                self.error = false;
+                self.toast("Event deleted", cx);
             }
         }
         cx.notify();
     }
     fn dispatch(&self, command: Command) {
         let _ = self.commands.send(command);
+    }
+    /// Sync now, reporting back with a toast when it ends.
+    fn sync_now(&mut self, cx: &mut Context<Self>) {
+        self.manual_sync = Some(false);
+        self.dispatch(Command::Sync(self.date));
+        cx.notify();
     }
     pub fn set_view(&mut self, view: View) {
         self.view = view;
@@ -493,10 +571,36 @@ impl Ocal {
                 .update(cx, |c, cx| c.set_selected(index, cx));
         }
         self.sidebar_hidden = get("sidebar") == Some("hidden");
+        if let Some(appearance) = get("appearance").and_then(Appearance::parse) {
+            self.set_appearance(appearance, cx);
+        }
         self.active_set = get("set")
             .filter(|id| self.snapshot.sets.iter().any(|s| s.id == *id))
             .map(Into::into);
         self.reveal_cursor = true;
+    }
+    /// Override the system theme with light or dark, or follow it again.
+    fn set_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        if appearance != Appearance::System || self.appearance != Appearance::System {
+            appearance.apply(cx);
+        }
+        self.appearance = appearance;
+        cx.notify();
+    }
+    /// Choose and remember an appearance.
+    fn choose_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        self.set_appearance(appearance, cx);
+        self.remember("appearance", appearance.name());
+    }
+    /// The footer toggle: switch to the other of light and dark, or back to the system.
+    fn toggle_appearance(&mut self, cx: &mut Context<Self>) {
+        use crate::appearance::Tones;
+        let next = match self.appearance {
+            Appearance::System if cx.omarchy().dark() => Appearance::Light,
+            Appearance::System => Appearance::Dark,
+            _ => Appearance::System,
+        };
+        self.choose_appearance(next, cx);
     }
     /// Persist an interface choice for the next launch.
     fn remember(&self, key: &str, value: impl Into<String>) {
@@ -557,11 +661,24 @@ impl Ocal {
         self.search.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
+    /// The full keyboard page.
+    fn show_help(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() {
+            return;
+        }
+        self.help = true;
+        self.settings = false;
+        self.keys_open = false;
+        self.selected = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
     fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor.is_some() {
             return;
         }
         self.settings = true;
+        self.keys_open = false;
         self.help = false;
         self.selected = None;
         self.sidebar_open = false;
@@ -612,7 +729,7 @@ impl Ocal {
             .snapshot
             .events
             .iter()
-            .filter(|e| !e.completed && visible.contains(e.calendar.as_str()))
+            .filter(|e| visible.contains(e.calendar.as_str()))
             .filter(|e| {
                 query.is_empty() || matches(&e.title) || matches(&e.location) || matches(&e.notes)
             })
@@ -716,9 +833,7 @@ impl Ocal {
                 .iter()
                 .find(|c| c.writable && (!task || c.account.is_none()))
         }) else {
-            self.status = "Connect a calendar or add a local calendar first".into();
-            self.error = true;
-            cx.notify();
+            self.toast_error("Connect a calendar or add a local calendar first", cx);
             return;
         };
         let mut e = Event::new(&calendar.id, self.date, &self.display_zone).unwrap();
@@ -732,9 +847,7 @@ impl Ocal {
                 e.end = t;
             }
             _ => {
-                self.status = "Choose a time outside the daylight-saving transition".into();
-                self.error = true;
-                cx.notify();
+                self.toast_error("Choose a time outside the daylight-saving transition", cx);
                 return;
             }
         }
@@ -750,7 +863,15 @@ impl Ocal {
             self.close_editor(window, cx);
             return;
         }
-        if self.selected.is_some() {
+        let searching = self.search.read(cx).focus_handle(cx).is_focused(window)
+            && !self.search.read(cx).value().is_empty();
+        if self.keys_open {
+            self.keys_open = false;
+        } else if searching {
+            // Typing a search, Esc clears it before closing anything behind it.
+            self.search.update(cx, |s, cx| s.set_value("", window, cx));
+            self.search_open = false;
+        } else if self.selected.is_some() {
             self.selected = None;
         } else if self.settings || self.help || self.sidebar_open {
             self.settings = false;
@@ -889,15 +1010,15 @@ impl Render for Ocal {
         };
         let docked = layout.sidebar && !self.sidebar_hidden;
         let gap = rems(SHEET_GAP);
-        // The calendar sits on a raised, rounded sheet; the sidebar and status line
-        // stay on the inset window background around it.
+        // The calendar sits on a raised, rounded sheet; the sidebar stays on the
+        // inset window background around it.
         let sheet = div()
             .debug_selector(|| "sheet".into())
             .flex_1()
-            .min_h_0()
+            .min_w_0()
             .flex()
             .flex_col()
-            .mt(gap)
+            .my(gap)
             .mr(gap)
             .when(!docked, |s| s.ml(gap))
             .rounded(RADIUS_SHEET)
@@ -911,15 +1032,7 @@ impl Render for Ocal {
             .min_h_0()
             .flex()
             .children(docked.then(|| self.sidebar(false, cx)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(sheet)
-                    .child(self.status_bar(layout, cursor_event.as_ref(), cx)),
-            );
+            .child(sheet);
         let mut root = focus_scope("ocal")
             .track_focus(&self.focus)
             .key_context("Ocal OmarchyFocusScope")
@@ -956,15 +1069,14 @@ impl Render for Ocal {
             }))
             .on_action(cx.listener(|app, _: &Save, _, cx| app.save(cx)))
             .on_action(cx.listener(|app, _: &Escape, window, cx| app.escape(window, cx)))
-            .on_action(cx.listener(|app, _: &Help, _, cx| {
+            .on_action(cx.listener(|app, _: &Shortcuts, _, cx| {
                 if app.editor.is_none() {
-                    app.help = !app.help;
-                    app.settings = false;
+                    app.keys_open = !app.keys_open;
                     cx.notify();
                 }
             }))
             .on_action(cx.listener(|app, _: &Search, window, cx| app.open_search(window, cx)))
-            .on_action(cx.listener(|app, _: &Sync, _, _cx| app.dispatch(Command::Sync(app.date))))
+            .on_action(cx.listener(|app, _: &Sync, _, cx| app.sync_now(cx)))
             .on_action(cx.listener(|app, _: &ZoomIn, _, cx| {
                 app.zoom = (app.zoom + 0.1).min(1.8);
                 app.remember("zoom", format!("{:.1}", app.zoom));
@@ -1078,6 +1190,13 @@ impl Render for Ocal {
         }
         if self.editor.is_some() {
             root = root.child(self.editor_view(window, cx));
+        }
+        if self.keys_open {
+            root = root.child(self.shortcuts_card(cx));
+        }
+        if !self.toasts.is_empty() {
+            let left = rems(if docked { SIDEBAR } else { SHEET_GAP });
+            root = root.child(self.toast_layer(left, cx));
         }
         root
     }

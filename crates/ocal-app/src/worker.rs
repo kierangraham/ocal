@@ -1,5 +1,7 @@
 use chrono::{Duration, NaiveDate, Utc};
-use ocal_core::{Calendar, CalendarSet, Event as CalendarEvent, Service, Snapshot, Store};
+use ocal_core::{
+    Calendar, CalendarSet, Event as CalendarEvent, Service, Snapshot, Store, SyncState,
+};
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool, mpsc},
@@ -25,6 +27,8 @@ pub enum Command {
 }
 pub enum Event {
     Snapshot(Snapshot),
+    /// Sent when a sync starts and again when it ends.
+    Sync(SyncState),
     Status(String),
     Progress(String),
     Error(String),
@@ -67,19 +71,16 @@ impl Worker {
                 }
             };
             snapshot(&service, &events);
+            // Sync failures show in the sidebar footer rather than interrupting.
+            let mut state = SyncState::default();
             if !demo
                 && service
                     .store
                     .snapshot()
                     .is_ok_and(|s| !s.accounts.is_empty())
             {
-                match service.sync() {
-                    Ok(()) => snapshot(&service, &events),
-                    Err(error) => {
-                        snapshot(&service, &events);
-                        let _ = events.send_blocking(Event::Error(format!("{error:#}")));
-                    }
-                }
+                sync(&mut service, &mut state, &events);
+                snapshot(&service, &events);
             }
             let mut last = Instant::now();
             let mut pending: Option<(CalendarEvent, Instant)> = None;
@@ -108,14 +109,8 @@ impl Worker {
                             }
                         }
                         if last.elapsed().as_secs() >= 300 && !demo {
-                            match service.sync() {
-                                Ok(()) => snapshot(&service, &events),
-                                Err(error) => {
-                                    snapshot(&service, &events);
-                                    let _ =
-                                        events.send_blocking(Event::Error(format!("{error:#}")));
-                                }
-                            }
+                            sync(&mut service, &mut state, &events);
+                            snapshot(&service, &events);
                             last = Instant::now();
                         }
                         continue;
@@ -140,15 +135,11 @@ impl Worker {
                         }
                         Command::Sync(date) => {
                             service.range = (date - Duration::days(60), date + Duration::days(120));
-                            service.sync()?;
+                            // The sync state reports the outcome, so moving between
+                            // months offline doesn't raise an error each time.
+                            sync(&mut service, &mut state, &events);
                             last = Instant::now();
-                            Ok(Some(Event::Status(if service.demo {
-                                "Demo calendar refreshed".into()
-                            } else if service.store.snapshot()?.accounts.is_empty() {
-                                "Local calendars are up to date".into()
-                            } else {
-                                "Google calendars synced".into()
-                            })))
+                            Ok(None)
                         }
                         Command::Visible(c) => {
                             service.store.save_calendar(&c)?;
@@ -181,6 +172,9 @@ impl Worker {
                                 },
                                 &background_cancel,
                             )?;
+                            // Connecting synced the new account.
+                            state.finish(&Ok(()), Utc::now());
+                            let _ = events.send_blocking(Event::Sync(state.clone()));
                             Ok(Some(Event::Connected))
                         }
                         Command::ConnectCustom => {
@@ -208,6 +202,8 @@ impl Worker {
                                     },
                                     &background_cancel,
                                 )?;
+                                state.finish(&Ok(()), Utc::now());
+                                let _ = events.send_blocking(Event::Sync(state.clone()));
                                 Ok(Some(Event::Connected))
                             } else {
                                 Ok(Some(Event::Status("Sign-in cancelled".into())))
@@ -267,13 +263,8 @@ impl Worker {
                     }
                 }
                 if last.elapsed().as_secs() > 300 && !demo {
-                    match service.sync() {
-                        Ok(()) => snapshot(&service, &events),
-                        Err(error) => {
-                            snapshot(&service, &events);
-                            let _ = events.send_blocking(Event::Error(format!("{error:#}")));
-                        }
-                    }
+                    sync(&mut service, &mut state, &events);
+                    snapshot(&service, &events);
                     last = Instant::now();
                 }
             }
@@ -284,6 +275,17 @@ impl Worker {
             cancel_sign_in,
         }
     }
+}
+/// Sync every account, reporting the state before and after.
+fn sync(service: &mut Service, state: &mut SyncState, events: &async_channel::Sender<Event>) {
+    state.syncing = true;
+    let _ = events.send_blocking(Event::Sync(state.clone()));
+    let result = service.sync();
+    if let Err(error) = &result {
+        eprintln!("Ocal: sync failed: {error:#}");
+    }
+    state.finish(&result, Utc::now());
+    let _ = events.send_blocking(Event::Sync(state.clone()));
 }
 fn snapshot(service: &Service, events: &async_channel::Sender<Event>) {
     match service.store.snapshot() {

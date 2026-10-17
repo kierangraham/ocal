@@ -72,9 +72,7 @@ impl Ocal {
             tool_button(id, IconName::Copy, what, "", cx).on_click(cx.listener(
                 move |app, _, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                    app.status = format!("{what} copied");
-                    app.error = false;
-                    cx.notify();
+                    app.toast(format!("{what} copied"), cx);
                 },
             ))
         };
@@ -191,16 +189,13 @@ impl Ocal {
                                         .arg(url.as_str())
                                         .spawn()
                                     {
-                                        app.status = error.to_string();
-                                        app.error = true;
+                                        app.toast_error(error.to_string(), cx);
                                     }
                                 }
                                 Err(error) => {
-                                    app.status = error.to_string();
-                                    app.error = true;
+                                    app.toast_error(error.to_string(), cx);
                                 }
                             }
-                            cx.notify();
                         })),
                     )
                     .child(copy("copy-link", e.link.clone(), "Meeting link", cx)),
@@ -415,7 +410,8 @@ impl Ocal {
             })
             .max_w(window.viewport_size().width)
             .max_h(
-                window.viewport_size().height - rems(HEADER + STATUS).to_pixels(window.rem_size()),
+                window.viewport_size().height
+                    - rems(HEADER + SHEET_GAP).to_pixels(window.rem_size()),
             )
             .flex()
             .flex_col()

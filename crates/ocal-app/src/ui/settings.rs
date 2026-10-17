@@ -1,6 +1,6 @@
 //! Settings and keyboard help pages.
 use super::*;
-use crate::appearance::{section_label, swatch};
+use crate::appearance::{pill_tab, section_label, swatch};
 use gpui_omarchy::{combobox, keycaps};
 
 /// Keys pressed together, and what they do.
@@ -136,10 +136,9 @@ impl Ocal {
                     .disabled(self.demo || self.busy || !google_ready)
                     .on_click(cx.listener(|app, _, _, cx| {
                         app.busy = true;
-                        app.error = false;
                         app.sign_in_url = None;
                         app.cancel_sign_in.store(false, Ordering::Relaxed);
-                        app.status = "Preparing Google sign-in link…".into();
+                        app.account_note = Some(("Preparing Google sign-in link…".into(), false));
                         app.dispatch(Command::Connect);
                         cx.notify();
                     })),
@@ -180,8 +179,7 @@ impl Ocal {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
                                         copy_url.clone(),
                                     ));
-                                    app.status = "Sign-in link copied · Paste it into your preferred browser profile".into();
-                                    cx.notify();
+                                    app.toast("Sign-in link copied", cx);
                                 })),
                             )
                             .child(
@@ -197,8 +195,7 @@ impl Ocal {
                                         .spawn()
                                         .is_err()
                                     {
-                                        app.status = "Could not open the browser. Use Copy again and paste the link into your browser".into();
-                                        cx.notify();
+                                        app.toast_error("Could not open the browser. Use Copy again and paste the link into your browser", cx);
                                     }
                                 })),
                             )
@@ -208,7 +205,8 @@ impl Ocal {
                                     .on_click(cx.listener(|app, _, _, cx| {
                                         app.cancel_sign_in.store(true, Ordering::Relaxed);
                                         app.sign_in_url = None;
-                                        app.status = "Cancelling sign-in…".into();
+                                        app.account_note =
+                                            Some(("Cancelling sign-in…".into(), false));
                                         cx.notify();
                                     })),
                             ),
@@ -218,7 +216,7 @@ impl Ocal {
                         cx,
                     ))
             }))
-            .children((self.busy || self.error).then(|| {
+            .children(self.account_note.clone().map(|(note, error)| {
                 div()
                     .id("account-status")
                     .debug_selector(|| "account-status".into())
@@ -226,10 +224,10 @@ impl Ocal {
                     .p(rems(0.7))
                     .border_1()
                     .border_l_2()
-                    .border_color(if self.error { t.danger } else { t.divider() })
-                    .text_color(if self.error { t.danger } else { t.secondary })
+                    .border_color(if error { t.danger } else { t.divider() })
+                    .text_color(if error { t.danger } else { t.secondary })
                     .whitespace_normal()
-                    .child(self.status.clone())
+                    .child(note)
             }))
             .child(
                 div().flex().child(
@@ -272,10 +270,10 @@ impl Ocal {
                         .disabled(self.demo || self.busy)
                         .on_click(cx.listener(|app, _, _, cx| {
                             app.busy = true;
-                            app.error = false;
                             app.sign_in_url = None;
                             app.cancel_sign_in.store(false, Ordering::Relaxed);
-                            app.status = "Choose a Google client file…".into();
+                            app.account_note =
+                                Some(("Choose a Google client file…".into(), false));
                             app.dispatch(Command::ConnectCustom);
                             cx.notify();
                         })),
@@ -362,8 +360,7 @@ impl Ocal {
                             .on_click(cx.listener(|app, _, window, cx| {
                                 let name = app.set_name.read(cx).value().trim().to_owned();
                                 if name.is_empty() {
-                                    app.status = "Name your calendar set".into();
-                                    app.error = true;
+                                    app.toast("Name your calendar set", cx);
                                 } else {
                                     app.dispatch(Command::SaveSet(CalendarSet {
                                         id: uuid::Uuid::new_v4().to_string(),
@@ -438,10 +435,32 @@ impl Ocal {
             .child(row("Interface size", zoom.into_any_element()))
             .child(row("Weeks start", div().child("Sunday").into_any_element()))
             .child(row(
+                "Appearance",
+                div()
+                    .flex()
+                    .gap(px(2.))
+                    .children(Appearance::ALL.into_iter().enumerate().map(|(i, a)| {
+                        pill_tab(("appearance", i), a.label(), a == self.appearance, cx)
+                            .debug_selector(move || format!("appearance-{}", a.name()))
+                            .on_click(
+                                cx.listener(move |app, _, _, cx| app.choose_appearance(a, cx)),
+                            )
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
                 "Theme",
                 div()
                     .text_color(t.foreground)
-                    .child(format!("{} · follows Omarchy", t.name))
+                    .child(format!(
+                        "{} · {}",
+                        t.name,
+                        if self.appearance == Appearance::System {
+                            "follows Omarchy"
+                        } else {
+                            "chosen in Ocal"
+                        }
+                    ))
                     .into_any_element(),
             ));
         section("DISPLAY", cx).child(body)
@@ -524,7 +543,7 @@ impl Ocal {
                     (&["ctrl", "+"], "Larger interface"),
                     (&["ctrl", "−"], "Smaller interface"),
                     (&["ctrl", "0"], "Reset interface size"),
-                    (&["?"], "This page"),
+                    (&["?"], "The main keys, in a card"),
                 ],
             ),
         ];

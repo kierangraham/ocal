@@ -75,7 +75,8 @@ fn custom_sign_in_is_disclosed_and_stays_busy_until_completion(cx: &mut TestAppC
         );
     });
     draw(cx);
-    assert!(view.read_with(cx, |app, _| app.busy && !app.error));
+    assert!(view.read_with(cx, |app, _| app.busy
+        && app.account_note.as_ref().is_some_and(|(_, error)| !error)));
     let custom = cx.debug_bounds("connect-google-custom").unwrap().center();
     cx.simulate_click(custom, Default::default());
     assert!(commands.try_recv().is_err());
@@ -92,7 +93,9 @@ fn custom_sign_in_is_disclosed_and_stays_busy_until_completion(cx: &mut TestAppC
     view.update(cx, |app, cx| {
         app.event(WorkerEvent::Status("Google Calendar connected".into()), cx);
     });
-    assert!(view.read_with(cx, |app, _| !app.busy && !app.error));
+    assert!(view.read_with(cx, |app, _| !app.busy
+        && app.account_note.is_none()
+        && app.toast_texts() == ["Google Calendar connected"]));
 }
 
 #[gpui_kit::test]
@@ -141,7 +144,11 @@ fn sign_in_errors_are_visible_at_the_button_and_success_returns_to_the_calendar(
     let status = cx.debug_bounds("account-status").unwrap();
     let button = cx.debug_bounds("connect-google").unwrap();
     assert!(status.top() > button.bottom());
-    assert!(view.read_with(cx, |app, _| app.settings && app.error && !app.busy));
+    assert!(view.read_with(cx, |app, _| app.settings
+        && app.account_note.as_ref().is_some_and(|(_, error)| *error)
+        && !app.busy));
+    // The page already shows the failure, so no toast repeats it.
+    assert!(view.read_with(cx, |app, _| app.toast_texts().is_empty()));
     view.update(cx, |app, cx| {
         app.active_set = Some("previous-local-set".into());
         app.event(WorkerEvent::Connected, cx);
@@ -149,7 +156,7 @@ fn sign_in_errors_are_visible_at_the_button_and_success_returns_to_the_calendar(
     draw(cx);
     assert!(view.read_with(cx, |app, _| !app.settings
         && !app.busy
-        && !app.error
+        && app.account_note.is_none()
         && app.active_set.is_none()));
     assert!(cx.debug_bounds("account-status").is_none());
 }
@@ -1157,12 +1164,219 @@ fn settings_and_help_pages_render_and_return_to_the_calendar(cx: &mut TestAppCon
     cx.simulate_click(back, Default::default());
     draw(cx);
     assert!(view.read_with(cx, |app, _| !app.settings));
+    // `?` opens the shortcuts card; its link opens the full page.
     cx.simulate_keystrokes("?");
     draw(cx);
-    assert!(view.read_with(cx, |app, _| app.help));
+    let all = cx.debug_bounds("all-shortcuts").unwrap().center();
+    cx.simulate_click(all, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.help && !app.keys_open));
     let close = cx.debug_bounds("close-help").unwrap().center();
     cx.simulate_click(close, Default::default());
     assert!(view.read_with(cx, |app, _| !app.help));
+}
+
+#[gpui_kit::test]
+fn question_mark_toggles_the_shortcuts_card_and_escape_or_an_outside_click_closes_it(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, _) = fixture(cx);
+    cx.simulate_keystrokes("?");
+    draw(cx);
+    let card = cx.debug_bounds("shortcuts-card").unwrap();
+    // It floats above the sidebar footer.
+    let footer = cx.debug_bounds("sync-status").unwrap();
+    assert!(card.bottom() < footer.top() && card.left() < footer.right());
+    cx.simulate_keystrokes("?");
+    draw(cx);
+    assert!(cx.debug_bounds("shortcuts-card").is_none());
+    // Esc closes the card before the details behind it.
+    view.update(cx, |app, cx| {
+        app.selected = app.snapshot.events.first().cloned();
+        app.keys_open = true;
+        cx.notify();
+    });
+    draw(cx);
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| !app.keys_open && app.selected.is_some()));
+    cx.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |app, _| app.selected.is_none()));
+    cx.simulate_keystrokes("?");
+    draw(cx);
+    let sheet = cx.debug_bounds("sheet").unwrap().center();
+    cx.simulate_click(sheet, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| !app.keys_open));
+}
+
+#[gpui_kit::test]
+fn toast_actions_run_once_and_messages_fade_while_errors_stay(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+    let (view, cx, _) = fixture(cx);
+    let undone = Rc::new(Cell::new(0));
+    let expired = Rc::new(Cell::new(0));
+    view.update(cx, |app, cx| {
+        let (undone, expired) = (undone.clone(), expired.clone());
+        app.show_toast(
+            feedback::Toast::info("Deleted “Dentist”")
+                .action("Undo", move |_, _, _| undone.set(undone.get() + 1))
+                .on_expire(move |_, _| expired.set(expired.get() + 1)),
+            cx,
+        );
+    });
+    draw(cx);
+    let toast = cx.debug_bounds("toast").unwrap();
+    let sheet = cx.debug_bounds("sheet").unwrap();
+    assert!(toast.bottom() < sheet.bottom() && toast.top() > sheet.center().y);
+    assert!((toast.center().x - sheet.center().x).abs() < px(2.));
+    let undo = cx.debug_bounds("toast-action").unwrap().center();
+    cx.simulate_click(undo, Default::default());
+    draw(cx);
+    assert_eq!((undone.get(), expired.get()), (1, 0));
+    assert!(cx.debug_bounds("toast").is_none());
+    // A plain message fades after four seconds, and its expiry runs.
+    view.update(cx, |app, cx| {
+        let expired = expired.clone();
+        app.show_toast(
+            feedback::Toast::info("Saved").on_expire(move |_, _| expired.set(expired.get() + 1)),
+            cx,
+        );
+        app.toast_error("Google could not be reached", cx);
+    });
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.run_until_parked();
+    draw(cx);
+    assert_eq!(expired.get(), 1);
+    assert!(cx.debug_bounds("toast").is_none());
+    // The error stays until it is closed.
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.toast_texts(), ["Google could not be reached"])
+    });
+    let close = cx.debug_bounds("toast-close").unwrap().center();
+    cx.simulate_click(close, Default::default());
+    assert!(view.read_with(cx, |app, _| app.toast_texts().is_empty()));
+    // A newer message replaces the current one, expiring it.
+    view.update(cx, |app, cx| {
+        let expired = expired.clone();
+        app.show_toast(
+            feedback::Toast::info("Deleted “Gym”")
+                .on_expire(move |_, _| expired.set(expired.get() + 1)),
+            cx,
+        );
+        app.toast("Saved", cx);
+        assert_eq!(app.toast_texts(), ["Saved"]);
+    });
+    assert_eq!(expired.get(), 2);
+}
+
+#[gpui_kit::test]
+fn the_footer_reports_sync_state_and_a_requested_sync_reports_back(cx: &mut TestAppContext) {
+    let (view, cx, commands) = fixture(cx);
+    let status = |view: &Entity<Ocal>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, cx| app.sync_status(cx).0)
+    };
+    assert_eq!(status(&view, cx), "Demo calendar");
+    view.update(cx, |app, _| app.demo = false);
+    assert_eq!(status(&view, cx), "On this computer");
+    view.update(cx, |app, cx| {
+        app.snapshot.accounts.push(ocal_core::Account {
+            id: "me@example.com".into(),
+            name: "me@example.com".into(),
+        });
+        cx.notify();
+    });
+    draw(cx);
+    cx.simulate_keystrokes("ctrl-r");
+    assert!(matches!(commands.try_recv().unwrap(), Command::Sync(_)));
+    let mut state = SyncState {
+        syncing: true,
+        ..Default::default()
+    };
+    view.update(cx, |app, cx| {
+        app.event(WorkerEvent::Sync(state.clone()), cx)
+    });
+    assert_eq!(status(&view, cx), "Syncing…");
+    state.finish(&Ok(()), Utc::now());
+    view.update(cx, |app, cx| {
+        app.event(WorkerEvent::Sync(state.clone()), cx)
+    });
+    assert_eq!(status(&view, cx), "Synced just now");
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.toast_texts(), ["Google calendars synced"])
+    });
+    // Background failures only show in the footer, with the reason on hover.
+    state.finish(
+        &Err(anyhow::anyhow!("Reconnect me@example.com")),
+        Utc::now(),
+    );
+    view.update(cx, |app, cx| {
+        app.event(WorkerEvent::Sync(state.clone()), cx)
+    });
+    assert_eq!(status(&view, cx), "Sync failed");
+    assert_eq!(view.read_with(cx, |app, _| app.toast_texts().len()), 1);
+    draw(cx);
+    assert!(cx.debug_bounds("tool-Settings").is_some());
+    assert!(cx.debug_bounds("tool-Keyboard shortcuts").is_none());
+}
+
+#[gpui_kit::test]
+fn appearance_is_remembered_and_the_footer_switches_between_light_and_dark(
+    cx: &mut TestAppContext,
+) {
+    use crate::appearance::Tones;
+    let (view, cx, commands) = fixture(cx);
+    view.update(cx, |app, cx| {
+        app.preferences_applied = false;
+        let mut snapshot = app.snapshot.clone();
+        snapshot
+            .preferences
+            .insert("appearance".into(), "light".into());
+        app.event(WorkerEvent::Snapshot(snapshot), cx);
+    });
+    draw(cx);
+    assert!(
+        view.read_with(cx, |app, cx| app.appearance == Appearance::Light
+            && !cx.omarchy().dark())
+    );
+    assert!(commands.try_recv().is_err());
+    // From an override, the toggle goes back to following the system.
+    let toggle = cx.debug_bounds("tool-Dark mode").unwrap().center();
+    cx.simulate_click(toggle, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.appearance == Appearance::System));
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        Command::SavePreference(k, v) if k == "appearance" && v == "system"
+    ));
+    // From the system theme, it switches to the other brightness.
+    let dark = view.read_with(cx, |_, cx| cx.omarchy().dark());
+    let label = if dark {
+        "tool-Light mode"
+    } else {
+        "tool-Dark mode"
+    };
+    let toggle = cx.debug_bounds(label).unwrap().center();
+    cx.simulate_click(toggle, Default::default());
+    draw(cx);
+    assert!(view.read_with(cx, |_, cx| cx.omarchy().dark() != dark));
+    commands.try_iter().for_each(drop);
+    // Settings offers all three.
+    view.update(cx, |app, cx| {
+        app.settings = true;
+        cx.notify();
+    });
+    draw(cx);
+    let pill = cx.debug_bounds("appearance-dark").unwrap().center();
+    cx.simulate_click(pill, Default::default());
+    assert!(
+        view.read_with(cx, |app, cx| app.appearance == Appearance::Dark
+            && cx.omarchy().dark())
+    );
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        Command::SavePreference(k, v) if k == "appearance" && v == "dark"
+    ));
 }
 
 #[gpui_kit::test]

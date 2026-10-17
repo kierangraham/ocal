@@ -182,7 +182,7 @@ impl Ocal {
         let events: Vec<_> = self
             .events(from, to, cx)
             .into_iter()
-            .filter(|e| !e.task)
+            .filter(|e| !e.task && !e.completed)
             .collect();
         let mut list = div().flex().flex_col();
         if searching {

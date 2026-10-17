@@ -23,7 +23,12 @@ impl Ocal {
         // Dates from a previous period would otherwise still claim pointer hits.
         self.grid_bounds.clear();
         let days = self.visible_days(compact);
-        let events = self.events(days[0], *days.last().unwrap() + Duration::days(1), cx);
+        // Completed tasks stay out of the grid for now.
+        let events: Vec<_> = self
+            .events(days[0], *days.last().unwrap() + Duration::days(1), cx)
+            .into_iter()
+            .filter(|e| !e.completed)
+            .collect();
         let today = self.today();
         let now = Utc::now();
         let target = cx.entity().downgrade();

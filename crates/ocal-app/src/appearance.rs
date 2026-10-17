@@ -57,6 +57,52 @@ impl Tones for Theme {
     }
 }
 
+/// Light or dark chosen in Ocal, or whatever the Omarchy theme is.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+impl Appearance {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.name() == name)
+    }
+    /// The stored preference value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+    /// Apply the palette. An override keeps the system palette when it already
+    /// has the chosen brightness, and otherwise uses Omail's pair.
+    pub fn apply(self, cx: &mut App) {
+        let system = || Theme::system_or_default();
+        match self {
+            Self::System => Theme::follow_system(cx),
+            Self::Light => Some(system())
+                .filter(|t| !t.dark())
+                .unwrap_or_else(Theme::flexoki_light)
+                .apply(cx),
+            Self::Dark => Some(system())
+                .filter(|t| t.dark())
+                .unwrap_or_else(Theme::tokyo_night)
+                .apply(cx),
+        }
+    }
+}
+
 /// `amount` of `color` mixed into `towards` in sRGB, like CSS `color-mix()`.
 /// A translucent `towards` is first laid over the theme background, so the result
 /// is always opaque.

@@ -344,7 +344,8 @@ impl Ocal {
         self.settings = false;
         self.help = false;
         self.sidebar_open = false;
-        self.error = false;
+        self.keys_open = false;
+        self.editor_error = None;
         cx.notify();
     }
     /// Shift the end by however far the start just moved.
@@ -530,14 +531,10 @@ impl Ocal {
                 if let Some(f) = &self.editor {
                     f.set_disabled(true, cx);
                 }
-                self.error = false;
-                self.status = "Saving…".into();
+                self.editor_error = None;
                 self.dispatch(Command::Save { event, notify });
             }
-            Err(e) => {
-                self.status = format!("{e:#}");
-                self.error = true;
-            }
+            Err(e) => self.editor_error = Some(format!("{e:#}")),
         }
         cx.notify();
     }
@@ -554,7 +551,7 @@ impl Ocal {
         }
         self.editor = None;
         self.selection.anchor = None;
-        self.error = false;
+        self.editor_error = None;
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -942,7 +939,7 @@ impl Ocal {
         } else {
             "Save"
         };
-        let error = (self.error && !busy).then(|| {
+        let error = self.editor_error.clone().filter(|_| !busy).map(|error| {
             div()
                 .debug_selector(|| "editor-error".into())
                 .px(rems(1.))
@@ -952,7 +949,7 @@ impl Ocal {
                 .text_color(t.danger)
                 .text_size(rems(0.72))
                 .whitespace_normal()
-                .child(self.status.clone())
+                .child(error)
         });
         let footer = if f.discard {
             div()
@@ -969,7 +966,7 @@ impl Ocal {
                         .on_click(cx.listener(|app, _, window, cx| {
                             app.editor = None;
                             app.selection.anchor = None;
-                            app.error = false;
+                            app.editor_error = None;
                             window.focus(&app.focus, cx);
                             cx.notify();
                         })),
@@ -1017,7 +1014,7 @@ impl Ocal {
             .absolute()
             .right_0()
             .top(rems(HEADER))
-            .bottom(rems(STATUS))
+            .bottom(rems(SHEET_GAP))
             .w(if self.compact {
                 window.viewport_size().width
             } else {

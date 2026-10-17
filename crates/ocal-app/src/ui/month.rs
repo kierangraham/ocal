@@ -6,7 +6,11 @@ impl Ocal {
     pub(super) fn month(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.omarchy().clone();
         let days = month_days(self.date);
-        let events = self.events(days[0], days[41] + Duration::days(1), cx);
+        let events: Vec<_> = self
+            .events(days[0], days[41] + Duration::days(1), cx)
+            .into_iter()
+            .filter(|e| !e.completed)
+            .collect();
         let compact = self.layout(window).compact;
         // Fit as many items as the measured cell height allows.
         let rem = window.rem_size();

@@ -1,4 +1,4 @@
-//! The sheet's toolbar and the status line.
+//! The sheet's toolbar.
 use super::*;
 use crate::appearance::{
     RADIUS_FIELD, Tones, inset_ring, pill_tab, separator, soft_keycap, tip_text, with_tip,
@@ -266,12 +266,7 @@ impl Ocal {
                 tool_button("sync", IconName::RefreshCw, "Sync calendars", "ctrl+r", cx)
                     .when(!layout.compact, |b| b.ml(rems(0.375)))
                     .disabled(self.busy)
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        app.dispatch(Command::Sync(app.date));
-                        app.status = "Syncing…".into();
-                        app.error = false;
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(|app, _, _, cx| app.sync_now(cx))),
             )
             .child(self.app_menu(cx))
             .into_any_element()
@@ -355,72 +350,12 @@ impl Ocal {
                                 .cloned()
                                 .collect(),
                         )),
-                        _ => {
-                            app.help = true;
-                            app.settings = false;
-                            app.selected = None;
-                        }
+                        _ => app.show_help(window, cx),
                     }
                     cx.notify();
                 });
             },
         )
         .into_any_element()
-    }
-
-    pub(super) fn status_bar(
-        &self,
-        layout: Layout,
-        cursor_event: Option<&Event>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let t = cx.omarchy().clone();
-        let hint = |keys: Vec<&'static str>, label: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(rems(0.35))
-                .children(keys.into_iter().map(|k| soft_keycap(k, false, cx)))
-                .child(label)
-        };
-        let grid = matches!(self.view, View::Day | View::Week) && !self.settings && !self.help;
-        div()
-            .h(rems(STATUS))
-            .flex_shrink_0()
-            .px(rems(0.5))
-            .flex()
-            .items_center()
-            .gap(rems(0.9))
-            .text_size(rems(0.68))
-            .child(
-                div()
-                    .debug_selector(|| "status".into())
-                    .flex_1()
-                    .min_w_0()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_color(if self.error { t.danger } else { t.muted() })
-                    .child(self.status.clone()),
-            )
-            .children((grid && !layout.compact).then(|| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(rems(0.9))
-                    .text_color(t.faint())
-                    .child(div().text_color(t.muted()).child(self.selection.label()))
-                    .child(hint(vec!["↑", "↓"], "move"))
-                    .child(hint(vec!["shift"], "range"))
-                    .child(hint(
-                        vec!["↵"],
-                        if cursor_event.is_some() {
-                            "open"
-                        } else {
-                            "add"
-                        },
-                    ))
-                    .child(hint(vec!["?"], "keys"))
-            }))
-            .into_any_element()
     }
 }

@@ -29,7 +29,7 @@ Rust 1.97.0 is pinned. Arch needs a C/C++ compiler, CMake, pkg-config, OpenSSL, 
 - Choose **Paste a meeting link** for an existing Meet, Zoom, Teams or other HTTP(S) link. Choose **Generate Google Meet** for a Google calendar that advertises Meet support. Ocal requests the conference on save, displays a pending state if Google is still generating it, and offers **Join meeting** once available. Ocal automatically checks the new conference for up to a minute; manual sync can also refresh it. Retry uses the same request ID. Choosing **No meeting link** removes an existing Google conference explicitly.
 - Guest invitations are a separate explicit choice. Remote events show **Save & invite** when guests and notification are enabled.
 
-Day, week, month, agenda and local tasks views share a mini calendar and calendar sets. Small windows use one day with a compact view picker and an optional sidebar. Scrolling forms keep the save button visible. Theme colors and typography follow Omarchy; icons, context menus and focus behavior match Omail.
+Day, week, month, agenda and local tasks views share a mini calendar and calendar sets. Small windows use one day with a compact view picker and an optional sidebar. Scrolling forms keep the save button visible. Theme colors and typography follow Omarchy, or a light or dark override from the sidebar footer or Settings; icons, context menus and focus behavior match Omail.
 
 ## Keyboard
 
@@ -48,7 +48,7 @@ Day, week, month, agenda and local tasks views share a mini calendar and calenda
 | Ctrl+R | Sync |
 | B | Toggle compact sidebar |
 | Ctrl+plus / minus / 0 | Zoom in / out / reset |
-| ? | Keyboard help |
+| ? | Shortcuts card; the … menu has the full list |
 
 Navigation shortcuts do not consume text typed into the editor or search field. Context menus handle their own arrows, Enter and Escape.
 
