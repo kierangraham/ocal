@@ -13,7 +13,7 @@ mod tests;
 use crate::{
     appearance::{
         Appearance, RADIUS_SHEET, action_button, card_shadow, day_number, event_text, reveal_field,
-        sheet_shadow, tint, tool_button,
+        sheet_shadow, task_check, tint, tool_button, with_tip,
     },
     menus::{ContextTarget, menu},
     worker::{Command, Event as WorkerEvent, Worker},
@@ -895,6 +895,52 @@ impl Ocal {
         self.delete_confirm = false;
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+    /// Mark a task done or not done, wherever its checkbox is drawn.
+    pub(super) fn toggle_task(&mut self, e: &Event, cx: &mut Context<Self>) {
+        let mut e = e.clone();
+        e.completed = !e.completed;
+        if e.completed {
+            self.toast(format!("Completed “{}”", e.title), cx);
+        }
+        self.dispatch(Command::Save {
+            event: e,
+            notify: false,
+        });
+        cx.notify();
+    }
+    /// A round task checkbox in the task's calendar colour that toggles completion
+    /// without also selecting or opening the task.
+    pub(super) fn task_toggle(
+        &self,
+        id: impl Into<gpui_kit::ElementId>,
+        e: &Event,
+        size: gpui_kit::Rems,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let task = e.clone();
+        with_tip(
+            task_check(
+                id,
+                self.calendar_color(&e.calendar, cx),
+                e.completed,
+                size,
+                cx,
+            )
+            .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(cx.listener(move |app, _, _, cx| {
+                cx.stop_propagation();
+                app.toggle_task(&task, cx);
+            })),
+            if e.completed {
+                "Mark not done"
+            } else {
+                "Mark done"
+            },
+        )
+        .into_any_element()
     }
     pub(super) fn duplicate(&mut self, e: &Event, window: &mut Window, cx: &mut Context<Self>) {
         let mut e = e.clone();

@@ -303,7 +303,6 @@ impl Ocal {
             let color = self.calendar_color(&e.calendar, cx);
             let due = e.date();
             let overdue = !e.completed && due < today;
-            let changed = e.clone();
             let pick = e.clone();
             list = list.child(
                 div()
@@ -319,31 +318,12 @@ impl Ocal {
                         t.foreground.opacity(0.)
                     })
                     .child(
-                        tool_button(
-                            ("task-check", i),
-                            if e.completed {
-                                IconName::SquareCheck
-                            } else {
-                                IconName::Square
-                            },
-                            if e.completed {
-                                "Mark not done"
-                            } else {
-                                "Mark done"
-                            },
-                            "",
-                            cx,
-                        )
-                        .text_color(if e.completed { t.accent } else { t.secondary })
-                        .on_click(cx.listener(move |app, _, _, cx| {
-                            let mut e = changed.clone();
-                            e.completed = !e.completed;
-                            app.dispatch(Command::Save {
-                                event: e,
-                                notify: false,
-                            });
-                            cx.notify();
-                        })),
+                        div()
+                            .size(rems(1.9))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(self.task_toggle(("task-check", i), e, rems(1.), cx)),
                     )
                     .child(
                         button(("task", i), "", ButtonVariant::Secondary, cx)
